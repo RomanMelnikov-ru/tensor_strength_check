@@ -3,6 +3,12 @@ import streamlit as st
 import plotly.graph_objs as go
 from math import radians
 
+st.set_page_config(
+    layout="wide",
+    page_title="Анализ НДС",
+    initial_sidebar_state="expanded"
+)
+
 # Глобальная переменная для хранения состояния камеры
 camera_state = None
 
@@ -156,14 +162,23 @@ def update_plot(eigenvalues, c, phi):
             ))
 
     # Настройки графика
-    fig.update_layout(scene=dict(
-        xaxis_title='σ₂',
-        yaxis_title='σ₃',
-        zaxis_title='σ₁',
-        xaxis=dict(range=[-50, 150]),
-        yaxis=dict(range=[-50, 150]),
-        zaxis=dict(range=[-50, 150])
-    ), title="Анализ напряженно-деформированного состояния")
+    fig.update_layout(
+        scene=dict(
+            xaxis_title='σ₂',
+            yaxis_title='σ₃',
+            zaxis_title='σ₁',
+            xaxis=dict(range=[-50, 150]),
+            yaxis=dict(range=[-50, 150]),
+            zaxis=dict(range=[-50, 150]),
+            aspectmode='cube',
+            camera=camera_state if camera_state is not None else dict(
+                eye=dict(x=1.5, y=1.5, z=1.2)
+            )
+        ),
+        title="Анализ напряженно-деформированного состояния",
+        height=900,
+        margin=dict(l=0, r=0, b=0, t=40)
+    )
 
     # Сохраняем текущее состояние камеры, если оно еще не сохранено
     if camera_state is not None:
@@ -172,7 +187,10 @@ def update_plot(eigenvalues, c, phi):
     # Сохраняем текущее состояние камеры после отображения графика
     camera_state = fig.layout.scene.camera
 
-    st.plotly_chart(fig)
+    st.plotly_chart(fig, use_container_width=True, config={
+        'displayModeBar': True,
+        'responsive': True
+    })
 
 # Расчет и вывод результатов
 def calculate():
