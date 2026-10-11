@@ -29,7 +29,7 @@ def calculate_strain_tensor(sigma, G, K):
     return epsilon_spherical, epsilon_deviatoric, epsilon
 
 def calculate_principal_stresses(sigma):
-    eigenvalues, eigenvectors = np.linalg.eigh(sigma)  # для симметричных матриц
+    eigenvalues, eigenvectors = np.linalg.eigh(sigma)
     idx = eigenvalues.argsort()[::-1]
     eigenvalues = eigenvalues[idx]
     eigenvectors = eigenvectors[:, idx]
@@ -85,7 +85,7 @@ def find_intersection(edge_func, sigma_range, plane_constant, vertex, axis, c, p
     return None
 
 # ---------- График ----------
-def update_plot(eigenvalues, c, phi):
+def update_plot(eigenvalues, c, phi, show_pyramid):
     fig = go.Figure()
 
     s1, s2, s3 = float(eigenvalues[0]), float(eigenvalues[1]), float(eigenvalues[2])
@@ -121,47 +121,52 @@ def update_plot(eigenvalues, c, phi):
         name="Девиаторная часть напряжения"
     ))
 
-    sigma_vertex = -c / np.tan(phi)
-    vertex = np.array([sigma_vertex, sigma_vertex, sigma_vertex])
+    # ----- Пирамида и поверхность прочности — только если включены -----
+    if show_pyramid:
+        sigma_vertex = -c / np.tan(phi)
+        vertex = np.array([sigma_vertex, sigma_vertex, sigma_vertex])
 
-    intersections = [
-        find_intersection(edge1, np.linspace(sigma_vertex, 100, 1000), 150, vertex, 1, c, phi),
-        find_intersection(edge2, np.linspace(sigma_vertex, 100, 1000), 150, vertex, 2, c, phi),
-        find_intersection(edge3, np.linspace(sigma_vertex, 100, 1000), 150, vertex, 3, c, phi),
-        find_intersection(edge4, np.linspace(sigma_vertex, 100, 1000), 150, vertex, 1, c, phi),
-        find_intersection(edge5, np.linspace(sigma_vertex, 100, 1000), 150, vertex, 2, c, phi),
-        find_intersection(edge6, np.linspace(sigma_vertex, 100, 1000), 150, vertex, 3, c, phi),
-    ]
+        intersections = [
+            find_intersection(edge1, np.linspace(sigma_vertex, 100, 1000), 150, vertex, 1, c, phi),
+            find_intersection(edge2, np.linspace(sigma_vertex, 100, 1000), 150, vertex, 2, c, phi),
+            find_intersection(edge3, np.linspace(sigma_vertex, 100, 1000), 150, vertex, 3, c, phi),
+            find_intersection(edge4, np.linspace(sigma_vertex, 100, 1000), 150, vertex, 1, c, phi),
+            find_intersection(edge5, np.linspace(sigma_vertex, 100, 1000), 150, vertex, 2, c, phi),
+            find_intersection(edge6, np.linspace(sigma_vertex, 100, 1000), 150, vertex, 3, c, phi),
+        ]
 
-    if all(i is not None for i in intersections):
-        all_points = [vertex] + intersections
-        x = [float(p[0]) for p in all_points]
-        y = [float(p[1]) for p in all_points]
-        z = [float(p[2]) for p in all_points]
+        if all(i is not None for i in intersections):
+            all_points = [vertex] + intersections
+            x = [float(p[0]) for p in all_points]
+            y = [float(p[1]) for p in all_points]
+            z = [float(p[2]) for p in all_points]
 
-        i_idx = [0, 0, 0, 0, 0, 0]
-        j_idx = [5, 1, 6, 2, 4, 3]
-        k_idx = [1, 6, 2, 4, 3, 5]
+            i_idx = [0, 0, 0, 0, 0, 0]
+            j_idx = [5, 1, 6, 2, 4, 3]
+            k_idx = [1, 6, 2, 4, 3, 5]
 
-        fig.add_trace(go.Mesh3d(
-            x=x, y=y, z=z,
-            i=i_idx, j=j_idx, k=k_idx,
-            color='orange', opacity=0.2,
-            name="Поверхность прочности", showlegend=True
-        ))
-
-        edges = [(0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (0, 6)]
-        for idx, e in enumerate(edges):
-            fig.add_trace(go.Scatter3d(
-                x=[x[e[0]], x[e[1]]],
-                y=[y[e[0]], y[e[1]]],
-                z=[z[e[0]], z[e[1]]],
-                mode='lines',
-                line=dict(color='orange', width=2),
-                name="Ребра пирамиды" if idx == 0 else None,
-                showlegend=(idx == 0),
-                legendgroup="edges"
+            # Грани пирамиды (поверхность прочности)
+            fig.add_trace(go.Mesh3d(
+                x=x, y=y, z=z,
+                i=i_idx, j=j_idx, k=k_idx,
+                color='orange', opacity=0.2,
+                name="Поверхность прочности", showlegend=True,
+                legendgroup="pyramid"
             ))
+
+            # Рёбра пирамиды
+            edges = [(0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (0, 6)]
+            for idx, e in enumerate(edges):
+                fig.add_trace(go.Scatter3d(
+                    x=[x[e[0]], x[e[1]]],
+                    y=[y[e[0]], y[e[1]]],
+                    z=[z[e[0]], z[e[1]]],
+                    mode='lines',
+                    line=dict(color='orange', width=2),
+                    name="Ребра пирамиды" if idx == 0 else None,
+                    showlegend=(idx == 0),
+                    legendgroup="pyramid"
+                ))
 
     fig.update_layout(
         scene=dict(
@@ -195,7 +200,6 @@ def calculate():
         sigma[1, 2] = float(st.session_state.tau23)
         sigma[2, 2] = float(st.session_state.sigma33)
 
-        # Симметрия
         sigma[1, 0] = sigma[0, 1]
         sigma[2, 0] = sigma[0, 2]
         sigma[2, 1] = sigma[1, 2]
@@ -255,7 +259,9 @@ def calculate():
             else:
                 st.error("Прочность не обеспечена (точка на грани или за пределами пирамиды).")
 
-        update_plot(eigenvalues, c, phi)
+        # Чекбокс "Показать поверхность прочности" читаем тут
+        show_pyramid = st.session_state.get("show_pyramid", False)
+        update_plot(eigenvalues, c, phi, show_pyramid)
 
     except (ValueError, ZeroDivisionError) as e:
         st.error(f"Проверьте введенные данные! ({e})")
@@ -269,13 +275,13 @@ def sync_symmetric():
 
 # ---------- Инициализация зеркальных компонент ----------
 if 'tau21' not in st.session_state:
-    st.session_state.tau21 = st.session_state.get('tau12', 10.0)
+    st.session_state.tau21 = st.session_state.get('tau12', 0.0)
 if 'tau31' not in st.session_state:
     st.session_state.tau31 = st.session_state.get('tau13', 0.0)
 if 'tau32' not in st.session_state:
     st.session_state.tau32 = st.session_state.get('tau23', 0.0)
 
-# ---------- Интерфейс: матрица 3×3 ----------
+# ---------- Интерфейс ----------
 st.sidebar.header("Тензор напряжений")
 
 # Строка i = 1
@@ -284,13 +290,13 @@ c1.number_input("σ₁₁", value=30.0, key="sigma11", on_change=calculate)
 c2.number_input("τ₁₂", value=0.0, key="tau12", on_change=sync_symmetric)
 c3.number_input("τ₁₃", value=0.0, key="tau13", on_change=sync_symmetric)
 
-# Строка i = 2  (τ₂₁ read-only, зеркалит τ₁₂)
+# Строка i = 2
 c1, c2, c3 = st.sidebar.columns(3)
 c1.number_input("τ₂₁", key="tau21", disabled=True)
 c2.number_input("σ₂₂", value=30.0, key="sigma22", on_change=calculate)
 c3.number_input("τ₂₃", value=0.0, key="tau23", on_change=sync_symmetric)
 
-# Строка i = 3  (τ₃₁, τ₃₂ read-only)
+# Строка i = 3
 c1, c2, c3 = st.sidebar.columns(3)
 c1.number_input("τ₃₁", key="tau31", disabled=True)
 c2.number_input("τ₃₂", key="tau32", disabled=True)
@@ -302,6 +308,15 @@ st.sidebar.number_input("Модуль Юнга E (кПа)", value=10000.0, key="
 st.sidebar.number_input("Коэффициент Пуассона ν", value=0.3, key="nu", on_change=calculate)
 st.sidebar.number_input("Сцепление c (кПа)", value=10.0, key="c", on_change=calculate)
 st.sidebar.number_input("Угол трения φ (°)", value=20.0, key="phi", on_change=calculate)
+
+# ---------- Переключатель отображения пирамиды ----------
+st.sidebar.header("Отображение")
+st.sidebar.checkbox(
+    "Показать поверхность прочности",
+    value=False,           # по умолчанию выключено
+    key="show_pyramid",
+    on_change=calculate
+)
 
 # ---------- Первичный расчёт ----------
 if 'init' not in st.session_state:
