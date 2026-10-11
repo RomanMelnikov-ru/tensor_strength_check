@@ -121,7 +121,6 @@ def update_plot(eigenvalues, c, phi, show_pyramid):
         name="Девиаторная часть напряжения"
     ))
 
-    # ----- Пирамида и поверхность прочности — только если включены -----
     if show_pyramid:
         sigma_vertex = -c / np.tan(phi)
         vertex = np.array([sigma_vertex, sigma_vertex, sigma_vertex])
@@ -145,7 +144,6 @@ def update_plot(eigenvalues, c, phi, show_pyramid):
             j_idx = [5, 1, 6, 2, 4, 3]
             k_idx = [1, 6, 2, 4, 3, 5]
 
-            # Грани пирамиды (поверхность прочности)
             fig.add_trace(go.Mesh3d(
                 x=x, y=y, z=z,
                 i=i_idx, j=j_idx, k=k_idx,
@@ -154,7 +152,6 @@ def update_plot(eigenvalues, c, phi, show_pyramid):
                 legendgroup="pyramid"
             ))
 
-            # Рёбра пирамиды
             edges = [(0, 1), (0, 2), (0, 3), (0, 4), (0, 5), (0, 6)]
             for idx, e in enumerate(edges):
                 fig.add_trace(go.Scatter3d(
@@ -223,6 +220,7 @@ def calculate():
         sigma_spherical_principal, sigma_deviatoric_principal = \
             calculate_spherical_and_deviatoric_principal_stresses(eigenvalues)
 
+        # ---------- Гармошка «Результаты расчета» ----------
         with st.expander("Результаты расчета", expanded=True):
             st.write(f"Модуль сдвига G: {round(G, 1)} кПа")
             st.write(f"Объемный модуль K: {round(K, 1)} кПа\n")
@@ -259,7 +257,105 @@ def calculate():
             else:
                 st.error("Прочность не обеспечена (точка на грани или за пределами пирамиды).")
 
-        # Чекбокс "Показать поверхность прочности" читаем тут
+        # ---------- Гармошка «Формулы для расчета» ----------
+        with st.expander("Формулы для расчета", expanded=False):
+            st.markdown(r"""
+### 1. Упругие константы
+
+$$
+G = \dfrac{E}{2(1+\nu)}, \qquad
+K = \dfrac{E}{3(1-2\nu)}
+$$
+
+### 2. Разложение тензора напряжений
+
+Среднее (гидростатическое) напряжение:
+
+$$
+\sigma_m = \dfrac{1}{3}\,\text{tr}\,\boldsymbol{\sigma} = \dfrac{\sigma_{11} + \sigma_{22} + \sigma_{33}}{3}
+$$
+
+Шаровая часть:
+
+$$
+\boldsymbol{\sigma}^{sph} = \sigma_m \,\mathbf{I}
+$$
+
+Девиаторная часть:
+
+$$
+\boldsymbol{\sigma}^{dev} = \boldsymbol{\sigma} - \boldsymbol{\sigma}^{sph}
+$$
+
+### 3. Главные напряжения
+
+Решается характеристическое уравнение:
+
+$$
+\det(\boldsymbol{\sigma} - \lambda \mathbf{I}) = 0
+\quad\Longrightarrow\quad
+\lambda_1 \ge \lambda_2 \ge \lambda_3
+$$
+
+Главные напряжения упорядочиваются по убыванию:
+$\sigma_1 = \lambda_1,\ \sigma_2 = \lambda_2,\ \sigma_3 = \lambda_3$.
+
+### 4. Тензор деформаций (закон Гука)
+
+Шаровая часть:
+
+$$
+\boldsymbol{\varepsilon}^{sph} = \dfrac{\boldsymbol{\sigma}^{sph}}{3K}
+$$
+
+Девиаторная часть:
+
+$$
+\boldsymbol{\varepsilon}^{dev} = \dfrac{\boldsymbol{\sigma}^{dev}}{2G}
+$$
+
+Полный тензор деформаций:
+
+$$
+\boldsymbol{\varepsilon} = \boldsymbol{\varepsilon}^{sph} + \boldsymbol{\varepsilon}^{dev}
+= \dfrac{1}{3K}\boldsymbol{\sigma}^{sph} + \dfrac{1}{2G}\boldsymbol{\sigma}^{dev}
+$$
+
+### 5. Критерий прочности Мора – Кулона
+
+Условие прочности для каждой пары главных напряжений:
+
+$$
+|\sigma_i - \sigma_j| \le \dfrac{2c\,\cos\varphi}{1 - \sin\varphi}
+\qquad (i \ne j)
+$$
+
+где:
+- $c$ — сцепление,
+- $\varphi$ — угол внутреннего трения.
+
+Прочность обеспечена, если неравенство выполняется для всех трёх пар:
+$(\sigma_1,\sigma_2)$, $(\sigma_1,\sigma_3)$, $(\sigma_2,\sigma_3)$.
+
+### 6. Пирамида Мора – Кулона
+
+Вершина пирамиды на гидростатической оси:
+
+$$
+\sigma_{vertex} = -\dfrac{c}{\tan\varphi}
+$$
+
+Ребра пирамиды описываются уравнениями вида:
+
+$$
+\sigma_1 = \dfrac{2c\,\cos\varphi + 2\sigma_3\,\sin\varphi}{1 - \sin\varphi}
+\quad\text{(для грани } \sigma_1 \ge \sigma_2 = \sigma_3\text{)}
+$$
+
+и аналогичными соотношениями для остальных пяти рёбер, полученных циклической перестановкой индексов.
+""")
+
+        # ---------- График ----------
         show_pyramid = st.session_state.get("show_pyramid", False)
         update_plot(eigenvalues, c, phi, show_pyramid)
 
@@ -284,36 +380,31 @@ if 'tau32' not in st.session_state:
 # ---------- Интерфейс ----------
 st.sidebar.header("Тензор напряжений")
 
-# Строка i = 1
 c1, c2, c3 = st.sidebar.columns(3)
 c1.number_input("σ₁₁", value=30.0, key="sigma11", on_change=calculate)
 c2.number_input("τ₁₂", value=0.0, key="tau12", on_change=sync_symmetric)
 c3.number_input("τ₁₃", value=0.0, key="tau13", on_change=sync_symmetric)
 
-# Строка i = 2
 c1, c2, c3 = st.sidebar.columns(3)
 c1.number_input("τ₂₁", key="tau21", disabled=True)
 c2.number_input("σ₂₂", value=30.0, key="sigma22", on_change=calculate)
 c3.number_input("τ₂₃", value=0.0, key="tau23", on_change=sync_symmetric)
 
-# Строка i = 3
 c1, c2, c3 = st.sidebar.columns(3)
 c1.number_input("τ₃₁", key="tau31", disabled=True)
 c2.number_input("τ₃₂", key="tau32", disabled=True)
 c3.number_input("σ₃₃", value=30.0, key="sigma33", on_change=calculate)
 
-# ---------- Механические характеристики ----------
 st.sidebar.header("Механические характеристики")
 st.sidebar.number_input("Модуль Юнга E (кПа)", value=10000.0, key="E", on_change=calculate)
 st.sidebar.number_input("Коэффициент Пуассона ν", value=0.3, key="nu", on_change=calculate)
 st.sidebar.number_input("Сцепление c (кПа)", value=10.0, key="c", on_change=calculate)
 st.sidebar.number_input("Угол трения φ (°)", value=20.0, key="phi", on_change=calculate)
 
-# ---------- Переключатель отображения пирамиды ----------
 st.sidebar.header("Отображение")
 st.sidebar.checkbox(
     "Показать поверхность прочности",
-    value=False,           # по умолчанию выключено
+    value=False,
     key="show_pyramid",
     on_change=calculate
 )
