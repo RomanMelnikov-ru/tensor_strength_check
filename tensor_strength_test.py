@@ -48,6 +48,61 @@ def check_mohr_coulomb_strength(sigma1, sigma2, sigma3, c, phi):
     return (strength_condition(sigma1, sigma2) and
             strength_condition(sigma1, sigma3) and
             strength_condition(sigma2, sigma3))
+def stress_invariants(sigma):
+    """Вычисляет инварианты напряжений: I1, J2, J3, p, q, угол Лоде."""
+    sigma = np.real(sigma).astype(float)
+
+    # Первый инвариант тензора напряжений
+    I1 = float(np.trace(sigma))
+
+    # Среднее напряжение
+    p = I1 / 3.0
+
+    # Девиатор напряжений
+    s = sigma - p * np.eye(3)
+
+    # Второй и третий инварианты девиатора
+    J2 = 0.5 * float(np.sum(s * s))          # s : s
+    J3 = float(np.trace(s @ s @ s)) / 3.0    # (1/3) tr(s^3)
+
+    # Девиаторное напряжение
+    q = float(np.sqrt(3.0 * J2))
+
+    # Угол Лоде – Надаи
+    if J2 < 1e-12:
+        theta = 0.0
+    else:
+        arg = -1.5 * np.sqrt(3.0) * J3 / (J2 ** 1.5)
+        arg = np.clip(arg, -1.0, 1.0)
+        theta = np.arcsin(arg) / 3.0
+
+    return {
+        "I1": I1,
+        "J2": J2,
+        "J3": J3,
+        "p": p,
+        "q": q,
+        "lode_rad": float(theta),
+        "lode_deg": float(np.degrees(theta)),
+    }
+
+
+def strength_envelope_pq(p_array, c, phi):
+    """Границы Мора-Кулона в плоскости p–q для трёхосного сжатия и растяжения."""
+    sin_phi = np.sin(phi)
+    cos_phi = np.cos(phi)
+
+    # Triaxial compression (theta = +30°)
+    M_tc = 6.0 * sin_phi / (3.0 - sin_phi)
+    k_tc = 6.0 * c * cos_phi / (3.0 - sin_phi)
+    q_tc = M_tc * p_array + k_tc
+
+    # Triaxial extension (theta = -30°)
+    M_te = 6.0 * sin_phi / (3.0 + sin_phi)
+    k_te = 6.0 * c * cos_phi / (3.0 + sin_phi)
+    q_te = M_te * p_array + k_te
+
+    return q_tc, q_te
 
 # ---------- Границы пирамиды Мора-Кулона ----------
 def edge1(s1, c, phi):
@@ -187,6 +242,85 @@ def update_plot(eigenvalues, c, phi, show_pyramid):
         'responsive': True
     })
 
+def update_pq_plot(inv, c, phi, sigma1, sigma3):
+    """2D-график в плоскости p–q."""
+    fig = go.Figure()
+
+    # Диапазон p — подберём так, чтобы захватить точку
+    p_min = min(-20.0, inv["p"] - 30.0)
+    p_max = max(200.0, inv["p"] + 50.0)
+    p_arr = np.linspace(p_min, p_max, 400)
+
+    q_tc, q_te = strength_envelope_pq(p_arr, c, phi)
+
+    # Область прочности — заливаем между двумя границами
+    fig.add_trace(go.Scatter(
+        x=np.concatenate([p_arr, p_arr[::-1]]),
+        y=np.concatenate([q_tc, q_te[::-1]]),
+        fill='toself',
+        fillcolor='rgba(255, 165, 0, 0.15)',
+        line=dict(color='rgba(255, 165, 0, 0)'),
+        name='Область прочности',
+        hoverinfo='skip',
+    ))
+
+    # Верхняя граница (triaxial compression)
+    fig.add_trace(go.Scatter(
+        x=p_arr, y=q_tc,
+        mode='lines',
+        line=dict(color='orange', width=2),
+        name='Мора–Кулон (сжатие, θ=+30°)',
+    ))
+
+    # Нижняя граница (triaxial extension)
+    fig.add_trace(go.Scatter(
+        x=p_arr, y=q_te,
+        mode='lines',
+        line=dict(color='darkorange', width=2, dash='dash'),
+        name='Мора–Кулон (растяжение, θ=−30°)',
+    ))
+
+    # Линия гидростатической оси q = 0
+    fig.add_trace(go.Scatter(
+        x=[p_min, p_max], y=[0, 0],
+        mode='lines',
+        line=dict(color='black', width=1, dash='dot'),
+        name='q = 0 (гидростатическая ось)',
+    ))
+
+    # Точка напряжённого состояния
+    fig.add_trace(go.Scatter(
+        x=[inv["p"]], y=[inv["q"]],
+        mode='markers+text',
+        marker=dict(color='red', size=12, symbol='circle'),
+        text=[f"  p={inv['p']:.1f}, q={inv['q']:.1f}"],
+        textposition='top right',
+        name='Напряжённое состояние',
+    ))
+
+    # Отрезок от точки до оси q=0 (наглядность)
+    fig.add_trace(go.Scatter(
+        x=[inv["p"], inv["p"]], y=[0, inv["q"]],
+        mode='lines',
+        line=dict(color='red', width=1, dash='dot'),
+        showlegend=False,
+    ))
+
+    fig.update_layout(
+        title=f"Плоскость p–q   (θ = {inv['lode_deg']:.1f}°)",
+        xaxis_title="p = (σ₁+σ₂+σ₃)/3, кПа",
+        yaxis_title="q = √(3J₂), кПа",
+        height=600,
+        margin=dict(l=60, r=20, t=50, b=50),
+        legend=dict(x=0.02, y=0.98, bgcolor='rgba(255,255,255,0.8)'),
+        uirevision="pq_constant",
+    )
+
+    st.plotly_chart(fig, use_container_width=True, config={
+        'displayModeBar': True,
+        'responsive': True,
+    })
+
 # ---------- Основной расчёт ----------
 def calculate():
     try:
@@ -210,6 +344,8 @@ def calculate():
         G, K = calculate_moduli(E, nu)
         eigenvalues, _ = calculate_principal_stresses(sigma)
         eigenvalues = np.real(eigenvalues).astype(float)
+
+        inv = stress_invariants(sigma)
 
         sigma_spherical, sigma_deviatoric = split_stress_tensor(sigma)
         epsilon_spherical, epsilon_deviatoric, epsilon = calculate_strain_tensor(sigma, G, K)
@@ -245,6 +381,14 @@ def calculate():
             print_matrix(sigma_deviatoric, "Тензор-девиатор напряжений (кПа)", 1)
 
             st.write(f"Главные напряжения (кПа): {np.round(eigenvalues, 1).tolist()}")
+
+            st.write("**Инварианты напряжённого состояния:**")
+            st.write(f"I₁ = tr σ = {inv['I1']:.2f} кПа")
+            st.write(f"J₂ = ½ s:s = {inv['J2']:.2f} кПа²")
+            st.write(f"J₃ = ⅓ tr(s³) = {inv['J3']:.2f} кПа³")
+            st.write(f"p = I₁/3 = {inv['p']:.2f} кПа")
+            st.write(f"q = √(3J₂) = {inv['q']:.2f} кПа")
+            st.write(f"Угол Лоде θ = {inv['lode_deg']:.2f}° "f"({inv['lode_rad']:.4f} рад)")
 
             print_matrix(sigma_spherical_principal, "Шаровая часть главных напряжений (кПа)", 1)
             print_matrix(sigma_deviatoric_principal, "Девиаторная часть главных напряжений (кПа)", 1)
@@ -322,43 +466,75 @@ $$
 = \dfrac{1}{3K}\boldsymbol{\sigma}^{sph} + \dfrac{1}{2G}\boldsymbol{\sigma}^{dev}
 $$
 
-### 5. Критерий прочности Мора – Кулона
-
-Условие прочности для каждой пары главных напряжений:
+### 5. Инварианты напряжений и параметры p–q
 
 $$
-|\sigma_i - \sigma_j| \le \dfrac{2c\,\cos\varphi}{1 - \sin\varphi}
-\qquad (i \ne j)
+p = \frac{I_1}{3} = \frac{\sigma_1 + \sigma_2 + \sigma_3}{3}
 $$
 
-где:
-- $c$ — сцепление,
-- $\varphi$ — угол внутреннего трения.
-
-Прочность обеспечена, если неравенство выполняется для всех трёх пар:
-$(\sigma_1,\sigma_2)$, $(\sigma_1,\sigma_3)$, $(\sigma_2,\sigma_3)$.
-
-### 6. Пирамида Мора – Кулона
-
-Вершина пирамиды на гидростатической оси:
-
 $$
-\sigma_{vertex} = -\dfrac{c}{\tan\varphi}
+J_2 = \frac{1}{2}\,s_{ij}s_{ij}, \qquad
+J_3 = \frac{1}{3}\,s_{ij}s_{jk}s_{ki}, \qquad
+s_{ij} = \sigma_{ij} - p\,\delta_{ij}
 $$
 
-Ребра пирамиды описываются уравнениями вида:
+$$
+q = \sqrt{3 J_2}
+$$
+
+### 6. Угол Лоде – Надаи
 
 $$
-\sigma_1 = \dfrac{2c\,\cos\varphi + 2\sigma_3\,\sin\varphi}{1 - \sin\varphi}
-\quad\text{(для грани } \sigma_1 \ge \sigma_2 = \sigma_3\text{)}
+\theta = \frac{1}{3}\arcsin\!\left(-\frac{3\sqrt{3}}{2}\cdot\frac{J_3}{J_2^{3/2}}\right),
+\qquad -\frac{\pi}{6} \le \theta \le \frac{\pi}{6}
+$$
+
+или через главные напряжения:
+
+$$
+\theta = \arctan\!\left(\frac{1}{\sqrt{3}}\cdot\frac{2\sigma_2 - \sigma_1 - \sigma_3}{\sigma_1 - \sigma_3}\right)
+$$
+
+Диапазоны:
+- θ = −30° — трёхосное растяжение,
+- θ = 0° — чистый сдвиг,
+- θ = +30° — трёхосное сжатие.
+
+### 7. Поверхность Мора – Кулона в плоскости p–q
+
+$$
+q = M(\theta)\,p + k(\theta),
+\qquad
+M(\theta) = \frac{6\sin\varphi}{3-\sin\varphi\sin 3\theta},
+\qquad
+k(\theta) = \frac{6c\cos\varphi}{3-\sin\varphi\sin 3\theta}
+$$
+
+Предельные случаи:
+
+$$
+q_{tc} = \frac{6\sin\varphi}{3-\sin\varphi}\,p + \frac{6c\cos\varphi}{3-\sin\varphi}
+\quad(\theta = +30°)
+$$
+
+$$
+q_{te} = \frac{6\sin\varphi}{3+\sin\varphi}\,p + \frac{6c\cos\varphi}{3+\sin\varphi}
+\quad(\theta = -30°)
 $$
 
 и аналогичными соотношениями для остальных пяти рёбер, полученных циклической перестановкой индексов.
 """)
 
-        # ---------- График ----------
+        # --- 3D-график (существующий) ---
         show_pyramid = st.session_state.get("show_pyramid", False)
         update_plot(eigenvalues, c, phi, show_pyramid)
+
+        # --- 2D-график в плоскости p–q ---
+        update_pq_plot(
+            inv, c, phi,
+            sigma1=float(eigenvalues[0]),
+            sigma3=float(eigenvalues[2]),
+        )
 
     except (ValueError, ZeroDivisionError) as e:
         st.error(f"Проверьте введенные данные! ({e})")
