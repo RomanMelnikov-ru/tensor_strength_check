@@ -166,6 +166,7 @@ def update_plot(eigenvalues, c, phi, show_pyramid):
                 ))
 
     fig.update_layout(
+        uirevision="constant",
         scene=dict(
             xaxis_title='σ₂',
             yaxis_title='σ₃',
