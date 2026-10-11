@@ -10,7 +10,16 @@ st.set_page_config(
 )
 
 # Глобальная переменная для хранения состояния камеры
-camera_state = None
+# Преобразование объекта камеры
+cam = fig.layout.scene.camera
+camera_state = {
+    'eye': {k: int(v) if isinstance(v, np.integer) else float(v) 
+            for k, v in dict(cam.eye).items()},
+    'up': {k: int(v) if isinstance(v, np.integer) else float(v) 
+           for k, v in dict(cam.up).items()},
+    'center': {k: int(v) if isinstance(v, np.integer) else float(v) 
+               for k, v in dict(cam.center).items()},
+}
 
 # Функции для расчетов
 def calculate_moduli(E, nu):
