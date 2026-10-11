@@ -29,7 +29,7 @@ def calculate_strain_tensor(sigma, G, K):
     return epsilon_spherical, epsilon_deviatoric, epsilon
 
 def calculate_principal_stresses(sigma):
-    eigenvalues, eigenvectors = np.linalg.eig(sigma)
+    eigenvalues, eigenvectors = np.linalg.eigh(sigma)  # было eig
     idx = eigenvalues.argsort()[::-1]
     eigenvalues = eigenvalues[idx]
     eigenvectors = eigenvectors[:, idx]
@@ -211,11 +211,12 @@ def calculate():
             float(eigenvalues[0]), float(eigenvalues[1]), float(eigenvalues[2]), c, phi
         )
 
-        def calculate_spherical_and_deviatoric_principal_stresses(ev):
-            sigma_mean = np.mean(ev)
-            sigma_sph = sigma_mean * np.eye(3)
-            sigma_dev = np.diag(ev) - sigma_sph
-            return sigma_sph, sigma_dev
+        def calculate_spherical_and_deviatoric_principal_stresses(eigenvalues):
+            eigenvalues = np.real(eigenvalues).astype(float)   # гарантируем действительность
+            sigma_mean = float(np.mean(eigenvalues))
+            sigma_spherical = sigma_mean * np.eye(3)
+            sigma_deviatoric = np.diag(eigenvalues) - sigma_spherical
+            return sigma_spherical, sigma_deviatoric
 
         sigma_spherical_principal, sigma_deviatoric_principal = \
             calculate_spherical_and_deviatoric_principal_stresses(eigenvalues)
