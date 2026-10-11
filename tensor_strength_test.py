@@ -9,10 +9,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Функции для расчетов
+# ---------- Функции расчёта ----------
 def calculate_moduli(E, nu):
-    G = E / (2 * (1 + nu))       # Модуль сдвига
-    K = E / (3 * (1 - 2 * nu))   # Объемный модуль
+    G = E / (2 * (1 + nu))
+    K = E / (3 * (1 - 2 * nu))
     return G, K
 
 def split_stress_tensor(sigma):
@@ -29,56 +29,67 @@ def calculate_strain_tensor(sigma, G, K):
     return epsilon_spherical, epsilon_deviatoric, epsilon
 
 def calculate_principal_stresses(sigma):
-    eigenvalues, eigenvectors = np.linalg.eigh(sigma)  # было eig
+    eigenvalues, eigenvectors = np.linalg.eigh(sigma)  # для симметричных матриц
     idx = eigenvalues.argsort()[::-1]
     eigenvalues = eigenvalues[idx]
     eigenvectors = eigenvectors[:, idx]
     return eigenvalues, eigenvectors
 
-# Границы пирамиды Мора-Кулона
-def edge1(sigma1, c, phi):
-    return sigma1 - (2 * c * np.cos(phi) + 2 * sigma1 * np.sin(phi)) / (1 + np.sin(phi))
+def calculate_spherical_and_deviatoric_principal_stresses(eigenvalues):
+    eigenvalues = np.real(eigenvalues).astype(float)
+    sigma_mean = float(np.mean(eigenvalues))
+    sigma_spherical = sigma_mean * np.eye(3)
+    sigma_deviatoric = np.diag(eigenvalues) - sigma_spherical
+    return sigma_spherical, sigma_deviatoric
 
-def edge2(sigma1, c, phi):
-    return sigma1 - (2 * c * np.cos(phi) + 2 * sigma1 * np.sin(phi)) / (1 + np.sin(phi))
+def check_mohr_coulomb_strength(sigma1, sigma2, sigma3, c, phi):
+    def strength_condition(si, sj):
+        return abs(si - sj) <= 2 * c * np.cos(phi) / (1 - np.sin(phi))
+    return (strength_condition(sigma1, sigma2) and
+            strength_condition(sigma1, sigma3) and
+            strength_condition(sigma2, sigma3))
 
-def edge3(sigma2, c, phi):
-    return sigma2 - (2 * c * np.cos(phi) + 2 * sigma2 * np.sin(phi)) / (1 + np.sin(phi))
+# ---------- Границы пирамиды Мора-Кулона ----------
+def edge1(s1, c, phi):
+    return s1 - (2*c*np.cos(phi) + 2*s1*np.sin(phi)) / (1 + np.sin(phi))
 
-def edge4(sigma1, c, phi):
-    return sigma1 + (2 * c * np.cos(phi) + 2 * sigma1 * np.sin(phi)) / (1 - np.sin(phi))
+def edge2(s1, c, phi):
+    return s1 - (2*c*np.cos(phi) + 2*s1*np.sin(phi)) / (1 + np.sin(phi))
 
-def edge5(sigma1, c, phi):
-    return sigma1 + (2 * c * np.cos(phi) + 2 * sigma1 * np.sin(phi)) / (1 - np.sin(phi))
+def edge3(s2, c, phi):
+    return s2 - (2*c*np.cos(phi) + 2*s2*np.sin(phi)) / (1 + np.sin(phi))
 
-def edge6(sigma2, c, phi):
-    return sigma2 + (2 * c * np.cos(phi) + 2 * sigma2 * np.sin(phi)) / (1 - np.sin(phi))
+def edge4(s1, c, phi):
+    return s1 + (2*c*np.cos(phi) + 2*s1*np.sin(phi)) / (1 - np.sin(phi))
+
+def edge5(s1, c, phi):
+    return s1 + (2*c*np.cos(phi) + 2*s1*np.sin(phi)) / (1 - np.sin(phi))
+
+def edge6(s2, c, phi):
+    return s2 + (2*c*np.cos(phi) + 2*s2*np.sin(phi)) / (1 - np.sin(phi))
 
 def find_intersection(edge_func, sigma_range, plane_constant, vertex, axis, c, phi):
     for sigma in sigma_range:
         if axis == 1:
-            sigma3 = edge_func(sigma, c, phi)
-            if sigma + sigma + sigma3 >= plane_constant:
-                return np.array([sigma, sigma, sigma3])
+            s3 = edge_func(sigma, c, phi)
+            if sigma + sigma + s3 >= plane_constant:
+                return np.array([sigma, sigma, s3])
         elif axis == 2:
-            sigma2 = edge_func(sigma, c, phi)
-            if sigma + sigma2 + sigma >= plane_constant:
-                return np.array([sigma, sigma2, sigma])
+            s2 = edge_func(sigma, c, phi)
+            if sigma + s2 + sigma >= plane_constant:
+                return np.array([sigma, s2, sigma])
         elif axis == 3:
-            sigma1 = edge_func(sigma, c, phi)
-            if sigma1 + sigma + sigma >= plane_constant:
-                return np.array([sigma1, sigma, sigma])
+            s1 = edge_func(sigma, c, phi)
+            if s1 + sigma + sigma >= plane_constant:
+                return np.array([s1, sigma, sigma])
     return None
 
+# ---------- График ----------
 def update_plot(eigenvalues, c, phi):
     fig = go.Figure()
 
-    # Приводим главные напряжения к обычным float (для JSON-сериализации)
-    s1 = float(eigenvalues[0])
-    s2 = float(eigenvalues[1])
-    s3 = float(eigenvalues[2])
+    s1, s2, s3 = float(eigenvalues[0]), float(eigenvalues[1]), float(eigenvalues[2])
 
-    # Гидростатическая ось
     hydrostatic_axis = np.linspace(-10, 50, 50).tolist()
     fig.add_trace(go.Scatter3d(
         x=hydrostatic_axis, y=hydrostatic_axis, z=hydrostatic_axis,
@@ -86,7 +97,6 @@ def update_plot(eigenvalues, c, phi):
         name="Гидростатическая ось"
     ))
 
-    # Оси координат
     fig.add_trace(go.Scatter3d(x=[0, 0], y=[0, 0], z=[0, 40],
                                mode='lines', line=dict(color='red'), name="σ₁"))
     fig.add_trace(go.Scatter3d(x=[0, 40], y=[0, 0], z=[0, 0],
@@ -94,13 +104,11 @@ def update_plot(eigenvalues, c, phi):
     fig.add_trace(go.Scatter3d(x=[0, 0], y=[0, 40], z=[0, 0],
                                mode='lines', line=dict(color='blue'), name="σ₃"))
 
-    # Точка напряжённого состояния
     fig.add_trace(go.Scatter3d(
         x=[s2], y=[s3], z=[s1], mode='markers',
         marker=dict(color='red', size=5), name="Напряженное состояние"
     ))
 
-    # Проекция на гидростатическую ось
     hydro_mean = float(np.mean([s1, s2, s3]))
     fig.add_trace(go.Scatter3d(
         x=[0, hydro_mean], y=[0, hydro_mean], z=[0, hydro_mean],
@@ -113,7 +121,6 @@ def update_plot(eigenvalues, c, phi):
         name="Девиаторная часть напряжения"
     ))
 
-    # Пирамида Мора-Кулона
     sigma_vertex = -c / np.tan(phi)
     vertex = np.array([sigma_vertex, sigma_vertex, sigma_vertex])
 
@@ -177,13 +184,7 @@ def update_plot(eigenvalues, c, phi):
         'responsive': True
     })
 
-def check_mohr_coulomb_strength(sigma1, sigma2, sigma3, c, phi):
-    def strength_condition(si, sj):
-        return abs(si - sj) <= 2 * c * np.cos(phi) / (1 - np.sin(phi))
-    return (strength_condition(sigma1, sigma2) and
-            strength_condition(sigma1, sigma3) and
-            strength_condition(sigma2, sigma3))
-
+# ---------- Основной расчёт ----------
 def calculate():
     try:
         sigma = np.zeros((3, 3))
@@ -193,6 +194,8 @@ def calculate():
         sigma[1, 1] = float(st.session_state.sigma22)
         sigma[1, 2] = float(st.session_state.tau23)
         sigma[2, 2] = float(st.session_state.sigma33)
+
+        # Симметрия
         sigma[1, 0] = sigma[0, 1]
         sigma[2, 0] = sigma[0, 2]
         sigma[2, 1] = sigma[1, 2]
@@ -203,7 +206,9 @@ def calculate():
         phi = radians(float(st.session_state.phi))
 
         G, K = calculate_moduli(E, nu)
-        eigenvalues, eigenvectors = calculate_principal_stresses(sigma)
+        eigenvalues, _ = calculate_principal_stresses(sigma)
+        eigenvalues = np.real(eigenvalues).astype(float)
+
         sigma_spherical, sigma_deviatoric = split_stress_tensor(sigma)
         epsilon_spherical, epsilon_deviatoric, epsilon = calculate_strain_tensor(sigma, G, K)
 
@@ -211,22 +216,16 @@ def calculate():
             float(eigenvalues[0]), float(eigenvalues[1]), float(eigenvalues[2]), c, phi
         )
 
-        def calculate_spherical_and_deviatoric_principal_stresses(eigenvalues):
-            eigenvalues = np.real(eigenvalues).astype(float)   # гарантируем действительность
-            sigma_mean = float(np.mean(eigenvalues))
-            sigma_spherical = sigma_mean * np.eye(3)
-            sigma_deviatoric = np.diag(eigenvalues) - sigma_spherical
-            return sigma_spherical, sigma_deviatoric
-
         sigma_spherical_principal, sigma_deviatoric_principal = \
             calculate_spherical_and_deviatoric_principal_stresses(eigenvalues)
 
-        with st.expander("Результаты расчета"):
+        with st.expander("Результаты расчета", expanded=True):
             st.write(f"Модуль сдвига G: {round(G, 1)} кПа")
             st.write(f"Объемный модуль K: {round(K, 1)} кПа\n")
 
             def print_matrix(matrix, name, precision):
                 st.write(f"{name}:\n")
+                matrix = np.real(matrix)
                 if precision == 1:
                     fmt = "{:.1f}"
                 elif precision == 5:
@@ -242,7 +241,7 @@ def calculate():
             print_matrix(sigma_spherical, "Шаровый тензор напряжений (кПа)", 1)
             print_matrix(sigma_deviatoric, "Тензор-девиатор напряжений (кПа)", 1)
 
-            st.write(f"Главные напряжения (кПа):\n{np.round(eigenvalues, 1)}")
+            st.write(f"Главные напряжения (кПа): {np.round(eigenvalues, 1).tolist()}")
 
             print_matrix(sigma_spherical_principal, "Шаровая часть главных напряжений (кПа)", 1)
             print_matrix(sigma_deviatoric_principal, "Девиаторная часть главных напряжений (кПа)", 1)
@@ -252,31 +251,68 @@ def calculate():
             print_matrix(epsilon, "Полный тензор деформаций", 5)
 
             if strength_check:
-                st.write("\nПрочность обеспечена (точка внутри пирамиды прочности).")
+                st.success("Прочность обеспечена (точка внутри пирамиды прочности).")
             else:
-                st.write("\nПрочность не обеспечена (точка на грани или за пределами пирамиды прочности).")
+                st.error("Прочность не обеспечена (точка на грани или за пределами пирамиды).")
 
         update_plot(eigenvalues, c, phi)
 
-    except ValueError:
-        st.error("Проверьте введенные данные!")
+    except (ValueError, ZeroDivisionError) as e:
+        st.error(f"Проверьте введенные данные! ({e})")
 
-# Интерфейс
+# ---------- Синхронизация симметричных компонент ----------
+def sync_symmetric():
+    st.session_state.tau21 = st.session_state.tau12
+    st.session_state.tau31 = st.session_state.tau13
+    st.session_state.tau32 = st.session_state.tau23
+    calculate()
+
+# ---------- Инициализация зеркальных компонент ----------
+if 'tau21' not in st.session_state:
+    st.session_state.tau21 = st.session_state.get('tau12', 10.0)
+if 'tau31' not in st.session_state:
+    st.session_state.tau31 = st.session_state.get('tau13', 0.0)
+if 'tau32' not in st.session_state:
+    st.session_state.tau32 = st.session_state.get('tau23', 0.0)
+
+# ---------- Интерфейс: матрица 3×3 ----------
 st.sidebar.header("Тензор напряжений")
-st.sidebar.number_input("σ₁₁", value=30.0, key="sigma11", on_change=calculate)
-st.sidebar.number_input("τ₁₂", value=10.0, key="tau12", on_change=calculate)
-st.sidebar.number_input("τ₁₃", value=0.0, key="tau13", on_change=calculate)
-st.sidebar.number_input("σ₂₂", value=30.0, key="sigma22", on_change=calculate)
-st.sidebar.number_input("τ₂₃", value=0.0, key="tau23", on_change=calculate)
-st.sidebar.number_input("σ₃₃", value=30.0, key="sigma33", on_change=calculate)
 
+st.sidebar.markdown(
+    """
+    <div style='display:grid; grid-template-columns: 1fr 1fr 1fr 1fr;
+                font-size:12px; color:gray; text-align:center; margin-bottom:-8px;'>
+        <div></div><div>j=1</div><div>j=2</div><div>j=3</div>
+    </div>
+    """, unsafe_allow_html=True
+)
+
+# Строка i = 1
+c1, c2, c3 = st.sidebar.columns(3)
+c1.number_input("σ₁₁", value=30.0, key="sigma11", on_change=calculate)
+c2.number_input("τ₁₂", value=10.0, key="tau12", on_change=sync_symmetric)
+c3.number_input("τ₁₃", value=0.0, key="tau13", on_change=sync_symmetric)
+
+# Строка i = 2  (τ₂₁ read-only, зеркалит τ₁₂)
+c1, c2, c3 = st.sidebar.columns(3)
+c1.number_input("τ₂₁", key="tau21", disabled=True)
+c2.number_input("σ₂₂", value=30.0, key="sigma22", on_change=calculate)
+c3.number_input("τ₂₃", value=0.0, key="tau23", on_change=sync_symmetric)
+
+# Строка i = 3  (τ₃₁, τ₃₂ read-only)
+c1, c2, c3 = st.sidebar.columns(3)
+c1.number_input("τ₃₁", key="tau31", disabled=True)
+c2.number_input("τ₃₂", key="tau32", disabled=True)
+c3.number_input("σ₃₃", value=30.0, key="sigma33", on_change=calculate)
+
+# ---------- Механические характеристики ----------
 st.sidebar.header("Механические характеристики")
-st.sidebar.number_input("Модуль Юнга E", value=10000.0, key="E", on_change=calculate)
-st.sidebar.number_input("Poisson's ratio ν", value=0.3, key="nu", on_change=calculate)
-st.sidebar.number_input("Сцепление c", value=10.0, key="c", on_change=calculate)
-st.sidebar.number_input("Угол трения φ (градусы)", value=20.0, key="phi", on_change=calculate)
+st.sidebar.number_input("Модуль Юнга E (кПа)", value=10000.0, key="E", on_change=calculate)
+st.sidebar.number_input("Коэффициент Пуассона ν", value=0.3, key="nu", on_change=calculate)
+st.sidebar.number_input("Сцепление c (кПа)", value=10.0, key="c", on_change=calculate)
+st.sidebar.number_input("Угол трения φ (°)", value=20.0, key="phi", on_change=calculate)
 
-# Первичный расчет
+# ---------- Первичный расчёт ----------
 if 'init' not in st.session_state:
     st.session_state.init = True
     calculate()
