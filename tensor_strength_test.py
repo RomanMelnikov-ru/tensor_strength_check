@@ -281,7 +281,7 @@ st.sidebar.header("Тензор напряжений")
 # Строка i = 1
 c1, c2, c3 = st.sidebar.columns(3)
 c1.number_input("σ₁₁", value=30.0, key="sigma11", on_change=calculate)
-c2.number_input("τ₁₂", value=10.0, key="tau12", on_change=sync_symmetric)
+c2.number_input("τ₁₂", value=0.0, key="tau12", on_change=sync_symmetric)
 c3.number_input("τ₁₃", value=0.0, key="tau13", on_change=sync_symmetric)
 
 # Строка i = 2  (τ₂₁ read-only, зеркалит τ₁₂)
