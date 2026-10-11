@@ -278,15 +278,6 @@ if 'tau32' not in st.session_state:
 # ---------- Интерфейс: матрица 3×3 ----------
 st.sidebar.header("Тензор напряжений")
 
-st.sidebar.markdown(
-    """
-    <div style='display:grid; grid-template-columns: 1fr 1fr 1fr 1fr;
-                font-size:12px; color:gray; text-align:center; margin-bottom:-8px;'>
-        <div></div><div>j=1</div><div>j=2</div><div>j=3</div>
-    </div>
-    """, unsafe_allow_html=True
-)
-
 # Строка i = 1
 c1, c2, c3 = st.sidebar.columns(3)
 c1.number_input("σ₁₁", value=30.0, key="sigma11", on_change=calculate)
