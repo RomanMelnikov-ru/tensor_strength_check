@@ -9,45 +9,61 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ---------- Функции расчёта ----------
+# ============================================================
+# БЛОК 1. ФУНКЦИИ РАСЧЁТА
+# ============================================================
+
 def calculate_moduli(E, nu):
+    """Вычисляет модуль сдвига G и объёмный модуль K."""
     G = E / (2 * (1 + nu))
     K = E / (3 * (1 - 2 * nu))
     return G, K
 
+
 def split_stress_tensor(sigma):
+    """Разложение тензора напряжений на шаровую и девиаторную части."""
     sigma_mean = np.trace(sigma) / 3
     sigma_spherical = sigma_mean * np.eye(3)
     sigma_deviatoric = sigma - sigma_spherical
     return sigma_spherical, sigma_deviatoric
 
+
 def calculate_strain_tensor(sigma, G, K):
+    """Вычисляет тензор деформаций по закону Гука."""
     sigma_spherical, sigma_deviatoric = split_stress_tensor(sigma)
     epsilon_spherical = sigma_spherical / (3 * K)
     epsilon_deviatoric = sigma_deviatoric / (2 * G)
     epsilon = epsilon_spherical + epsilon_deviatoric
     return epsilon_spherical, epsilon_deviatoric, epsilon
 
+
 def calculate_principal_stresses(sigma):
+    """Главные напряжения и их направления (по убыванию)."""
     eigenvalues, eigenvectors = np.linalg.eigh(sigma)
     idx = eigenvalues.argsort()[::-1]
     eigenvalues = eigenvalues[idx]
     eigenvectors = eigenvectors[:, idx]
     return eigenvalues, eigenvectors
 
+
 def calculate_spherical_and_deviatoric_principal_stresses(eigenvalues):
+    """Шаровая и девиаторная части главных напряжений."""
     eigenvalues = np.real(eigenvalues).astype(float)
     sigma_mean = float(np.mean(eigenvalues))
     sigma_spherical = sigma_mean * np.eye(3)
     sigma_deviatoric = np.diag(eigenvalues) - sigma_spherical
     return sigma_spherical, sigma_deviatoric
 
+
 def check_mohr_coulomb_strength(sigma1, sigma2, sigma3, c, phi):
+    """Проверка прочности по критерию Мора–Кулона."""
     def strength_condition(si, sj):
         return abs(si - sj) <= 2 * c * np.cos(phi) / (1 - np.sin(phi))
     return (strength_condition(sigma1, sigma2) and
             strength_condition(sigma1, sigma3) and
             strength_condition(sigma2, sigma3))
+
+
 def stress_invariants(sigma):
     """Вычисляет инварианты напряжений: I1, J2, J3, p, q, угол Лоде."""
     sigma = np.real(sigma).astype(float)
@@ -104,7 +120,100 @@ def strength_envelope_pq(p_array, c, phi):
 
     return q_tc, q_te
 
-# ---------- Границы пирамиды Мора-Кулона ----------
+
+def meridian_traces_in_3d(s1, s2, s3, c, phi):
+    """
+    Возвращает 2 луча из вершины пирамиды, лежащие в меридианной
+    плоскости (проходящей через гидроось и точку (s1,s2,s3)),
+    вдоль граней MC-пирамиды.
+
+    Луч: (V, direction) — от вершины пирамиды в направлении direction.
+    """
+    sin_phi = np.sin(phi)
+    cos_phi = np.cos(phi)
+
+    V_val = -c / np.tan(phi)
+    V = np.array([V_val, V_val, V_val])
+
+    # Нормаль меридианной плоскости
+    point = np.array([s1, s2, s3], dtype=float)
+    hydro = np.array([1.0, 1.0, 1.0])
+    n_mer = np.cross(hydro, point)
+    n_mer /= np.linalg.norm(n_mer)
+
+    # 6 нормалей граней пирамиды MC (в системе σ1, σ2, σ3).
+    # Каждая грань: n · X = d, где n — внешняя нормаль.
+    # Грани соответствуют активным парам главных напряжений.
+    # Используем пары (i, j): (1,3), (3,1), (1,2), (2,1), (2,3), (3,2).
+    # sigma_i - sigma_j = 2c·cosφ - (sigma_i + sigma_j)·sinφ
+    # → sigma_i(1+sinφ) - sigma_j(1-sinφ) = 2c·cosφ
+    # n = (1+sinφ)·e_i - (1-sinφ)·e_j,  d = 2c·cosφ
+
+    faces = []
+    for (i, j) in [(0, 2), (2, 0), (0, 1), (1, 0), (1, 2), (2, 1)]:
+        n = np.zeros(3)
+        n[i] = 1.0 + sin_phi
+        n[j] = -(1.0 - sin_phi)
+        faces.append((n, 2.0 * c * cos_phi))
+
+    # Направления пересечения меридианной плоскости с каждой гранью
+    directions = []
+    for n_face, d_face in faces:
+        d_line = np.cross(n_mer, n_face)
+        norm_d = np.linalg.norm(d_line)
+        if norm_d < 1e-9:
+            continue
+        d_line /= norm_d
+
+        # Ориентация: выбираем то направление, которое «смотрит в сторону
+        # положительных напряжений» (чтобы луч шёл из вершины в тело пирамиды).
+        # Проверка: смещаемся вдоль d_line на малое ε и смотрим, растёт ли
+        # расстояние от точки до гидрооси (т.е. уходим от вершины).
+        eps = 1.0
+        pt_test = V + eps * d_line
+        # Если y-координата (σ1) меньше, чем у V — переворачиваем знак
+        if pt_test[0] < V[0]:
+            d_line = -d_line
+        directions.append(d_line)
+
+    # Отбор 2 «внешних» направлений. Используем угол в π-плоскости:
+    # проекция каждого направления на π-плоскость должна быть
+    # максимально «в сторону» точки НДС, но так, чтобы направление лежало
+    # в меридианной плоскости (по построению).
+    #
+    # Практический критерий: из 6 направлений оставляем те 2, что дают
+    # проекцию на π-плоскость, наиболее близкую по углу к направлению точки.
+
+    # Направление точки в π-плоскости
+    x_pt = (s3 - s1) / np.sqrt(2.0)
+    y_pt = (2.0 * s2 - s1 - s3) / np.sqrt(6.0)
+    ang_pt = np.arctan2(y_pt, x_pt)
+
+    def proj_angle(d):
+        # Проекция направления на π-плоскость
+        # d — вектор в (σ1, σ2, σ3); проекция: x = (d3 - d1)/√2, y = (2d2 - d1 - d3)/√6
+        x = (d[2] - d[0]) / np.sqrt(2.0)
+        y = (2.0 * d[1] - d[0] - d[2]) / np.sqrt(6.0)
+        return np.arctan2(y, x)
+
+    angs = [proj_angle(d) for d in directions]
+
+    # Угловое расстояние до ang_pt (по модулю, с учётом цикличности)
+    def ang_diff(a, b):
+        d = abs(a - b) % (2 * np.pi)
+        return min(d, 2 * np.pi - d)
+
+    # Сортируем по угловой близости и берём 2 ближайших
+    order = sorted(range(len(directions)),
+                   key=lambda k: ang_diff(angs[k], ang_pt))
+    chosen = [directions[order[0]], directions[order[1]]]
+    return V, chosen
+
+
+# ============================================================
+# БЛОК 2. ГРАНИЦЫ ПИРАМИДЫ МОРА-КУЛОНА (без изменений)
+# ============================================================
+
 def edge1(s1, c, phi):
     return s1 - (2*c*np.cos(phi) + 2*s1*np.sin(phi)) / (1 + np.sin(phi))
 
@@ -139,12 +248,107 @@ def find_intersection(edge_func, sigma_range, plane_constant, vertex, axis, c, p
                 return np.array([s1, sigma, sigma])
     return None
 
-# ---------- График ----------
-def update_plot(eigenvalues, c, phi, show_pyramid):
+# ============================================================
+# БЛОК 2б. СЕЧЕНИЕ ПИРАМИДЫ МОРА–КУЛОНА ПЛОСКОСТЬЮ
+# ============================================================
+
+def pyramid_vertices(c, phi, p_max):
+    """
+    Возвращает 7 вершин MC-пирамиды:
+      [V, TC1, TE2, TC3, TE1, TC2, TE3]  — в порядке обхода шестиугольника.
+    V = (-c/tanφ, -c/tanφ, -c/tanφ) — вершина пирамиды на гидрооси.
+    Остальные 6 — на девиаторной плоскости p = p_max.
+    """
+    sin_phi = np.sin(phi)
+    cos_phi = np.cos(phi)
+    V_val = -c / np.tan(phi)
+    vertex = np.array([V_val, V_val, V_val])
+
+    d_TC = (6.0 * sin_phi * p_max + 6.0 * c * cos_phi) / (3.0 - sin_phi)
+    d_TE = (6.0 * sin_phi * p_max + 6.0 * c * cos_phi) / (3.0 + sin_phi)
+
+    tc_eq  = p_max - d_TC / 3.0
+    tc_big = p_max + 2.0 * d_TC / 3.0
+    te_eq    = p_max + d_TE / 3.0
+    te_small = p_max - 2.0 * d_TE / 3.0
+
+    hex_pts = [
+        np.array([tc_big,   tc_eq,    tc_eq]),      # TC1
+        np.array([te_eq,    te_small, te_eq]),      # TE2
+        np.array([tc_eq,    tc_eq,    tc_big]),     # TC3
+        np.array([te_small, te_eq,    te_eq]),      # TE1
+        np.array([tc_eq,    tc_big,   tc_eq]),      # TC2
+        np.array([te_eq,    te_eq,    te_small]),   # TE3
+    ]
+    return [vertex] + hex_pts
+
+
+def pyramid_edges(c, phi, p_max):
+    """
+    Возвращает список рёбер пирамиды MC как пар точек (p1, p2).
+    Рёбра: V — каждая из 6 вершин шестиугольника, плюс 6 рёбер шестиугольника.
+    """
+    pts = pyramid_vertices(c, phi, p_max)
+    V = pts[0]
+    hex6 = pts[1:]
+
+    edges = []
+    # 6 рёбер из вершины в каждую вершину шестиугольника
+    for h in hex6:
+        edges.append((V, h))
+    # 6 рёбер вдоль шестиугольника (замыкаем)
+    for i in range(6):
+        edges.append((hex6[i], hex6[(i + 1) % 6]))
+    return edges
+
+
+def slice_edges_with_plane(edges, origin, normal, tol=1e-9):
+    """
+    Пересечение списка рёбер (пар точек) с плоскостью (origin, normal).
+    Возвращает список 3D-точек пересечения.
+    """
+    n = np.asarray(normal, dtype=float)
+    n /= np.linalg.norm(n)
+    o = np.asarray(origin, dtype=float)
+
+    intersections = []
+    for (p1, p2) in edges:
+        p1 = np.asarray(p1, dtype=float)
+        p2 = np.asarray(p2, dtype=float)
+        d1 = float(np.dot(p1 - o, n))
+        d2 = float(np.dot(p2 - o, n))
+        if abs(d1 - d2) < tol:
+            continue
+        if d1 * d2 <= 0:
+            t = d1 / (d1 - d2)
+            pt = p1 + t * (p2 - p1)
+            intersections.append(pt)
+
+    # Уникализация
+    unique = []
+    for pt in intersections:
+        is_new = True
+        for q in unique:
+            if np.linalg.norm(pt - q) < 1e-6:
+                is_new = False
+                break
+        if is_new:
+            unique.append(pt)
+    return unique
+
+# ============================================================
+# БЛОК 3. ГРАФИКИ
+# ============================================================
+
+def update_plot(eigenvalues, c, phi, show_pyramid,
+                show_deviator_plane=False, show_meridian_plane=False):
+    """3D-график НДС, пирамиды Мора–Кулона и опциональных плоскостей."""
     fig = go.Figure()
 
     s1, s2, s3 = float(eigenvalues[0]), float(eigenvalues[1]), float(eigenvalues[2])
+    p_mean_pt = (s1 + s2 + s3) / 3.0
 
+    # Гидростатическая ось
     hydrostatic_axis = np.linspace(-10, 50, 50).tolist()
     fig.add_trace(go.Scatter3d(
         x=hydrostatic_axis, y=hydrostatic_axis, z=hydrostatic_axis,
@@ -152,6 +356,7 @@ def update_plot(eigenvalues, c, phi, show_pyramid):
         name="Гидростатическая ось"
     ))
 
+    # Оси главных напряжений
     fig.add_trace(go.Scatter3d(x=[0, 0], y=[0, 0], z=[0, 40],
                                mode='lines', line=dict(color='red'), name="σ₁"))
     fig.add_trace(go.Scatter3d(x=[0, 40], y=[0, 0], z=[0, 0],
@@ -159,11 +364,13 @@ def update_plot(eigenvalues, c, phi, show_pyramid):
     fig.add_trace(go.Scatter3d(x=[0, 0], y=[0, 40], z=[0, 0],
                                mode='lines', line=dict(color='blue'), name="σ₃"))
 
+    # Точка НДС
     fig.add_trace(go.Scatter3d(
         x=[s2], y=[s3], z=[s1], mode='markers',
         marker=dict(color='red', size=5), name="Напряженное состояние"
     ))
 
+    # Разложение на шаровую и девиаторную части
     hydro_mean = float(np.mean([s1, s2, s3]))
     fig.add_trace(go.Scatter3d(
         x=[0, hydro_mean], y=[0, hydro_mean], z=[0, hydro_mean],
@@ -176,6 +383,7 @@ def update_plot(eigenvalues, c, phi, show_pyramid):
         name="Девиаторная часть напряжения"
     ))
 
+    # --------- Пирамида Мора–Кулона (без изменений) ---------
     if show_pyramid:
         sigma_vertex = -c / np.tan(phi)
         vertex = np.array([sigma_vertex, sigma_vertex, sigma_vertex])
@@ -220,6 +428,179 @@ def update_plot(eigenvalues, c, phi, show_pyramid):
                     legendgroup="pyramid"
                 ))
 
+    # --------- След пирамиды на девиаторной и меридианной плоскостях ---------
+    if show_pyramid and (show_deviator_plane or show_meridian_plane):
+        sin_phi = np.sin(phi)
+        cos_phi = np.cos(phi)
+
+        # ---------------------------------------------------------
+        # 1. След на девиаторной плоскости (шестиугольник при p = σm)
+        # ---------------------------------------------------------
+        if show_deviator_plane:
+            p_pt = float(np.mean([s1, s2, s3]))
+            d_TC = (6.0 * sin_phi * p_pt + 6.0 * c * cos_phi) / (3.0 - sin_phi)
+            d_TE = (6.0 * sin_phi * p_pt + 6.0 * c * cos_phi) / (3.0 + sin_phi)
+
+            tc_eq  = p_pt - d_TC / 3.0
+            tc_big = p_pt + 2.0 * d_TC / 3.0
+            te_eq    = p_pt + d_TE / 3.0
+            te_small = p_pt - 2.0 * d_TE / 3.0
+
+            # 6 вершин в порядке обхода
+            hex_sigma = [
+                (tc_big,   tc_eq,    tc_eq),      # TC1
+                (te_eq,    te_small, te_eq),      # TE2
+                (tc_eq,    tc_eq,    tc_big),     # TC3
+                (te_small, te_eq,    te_eq),      # TE1
+                (tc_eq,    tc_big,   tc_eq),      # TC2
+                (te_eq,    te_eq,    te_small),   # TE3
+            ]
+            # Замыкаем
+            hex_sigma_closed = hex_sigma + [hex_sigma[0]]
+
+            # Перестановка (σ1, σ2, σ3) -> (x=σ2, y=σ3, z=σ1)
+            hx = [float(p[1]) for p in hex_sigma_closed]
+            hy = [float(p[2]) for p in hex_sigma_closed]
+            hz = [float(p[0]) for p in hex_sigma_closed]
+
+            fig.add_trace(go.Scatter3d(
+                x=hx, y=hy, z=hz,
+                mode='lines',
+                line=dict(color='crimson', width=5),
+                name='След пирамиды на π-плоскости',
+                legendgroup='trace_on_planes',
+                showlegend=True,
+            ))
+
+        # ---------------------------------------------------------
+        # 2. След на меридианной плоскости — честное сечение
+        # ---------------------------------------------------------
+        if show_meridian_plane:
+            point = np.array([s1, s2, s3], dtype=float)
+            hydro = np.array([1.0, 1.0, 1.0])
+            n_mer_raw = np.cross(hydro, point)
+            nv = np.linalg.norm(n_mer_raw)
+            if nv > 1e-9:
+                n_mer = n_mer_raw / nv
+
+                # Уровень обрезки пирамиды — совпадает с 3D-пирамидой
+                p_max = 150.0/3
+
+                # Реальные 12 рёбер пирамиды (без «фантомных» пар)
+                edges = pyramid_edges(c, phi, p_max)
+
+                # Пересечение рёбер с меридианной плоскостью
+                origin = np.zeros(3)
+                pts_in_plane = slice_edges_with_plane(edges, origin, n_mer)
+
+                for i, p in enumerate(pts_in_plane):
+                    st.write(f"  pt {i}: σ = ({p[0]:.2f}, {p[1]:.2f}, {p[2]:.2f}), "
+                             f"p = {(p[0] + p[1] + p[2]) / 3:.2f}")
+
+                if len(pts_in_plane) >= 2:
+                    # Находим вершину пирамиды V — это точка с минимальным p
+                    pts_sorted = sorted(pts_in_plane,
+                                        key=lambda p: (p[0] + p[1] + p[2]) / 3.0)
+                    V_pt = pts_sorted[0]  # вершина (наименьшее p)
+                    far_pts = pts_sorted[1:]  # дальние точки (наибольшее p)
+
+                    # Рисуем 2 луча из V в каждую дальнюю точку
+                    for idx, far in enumerate(far_pts):
+                        xs = [float(V_pt[1]), float(far[1])]  # x = σ₂
+                        ys = [float(V_pt[2]), float(far[2])]  # y = σ₃
+                        zs = [float(V_pt[0]), float(far[0])]  # z = σ₁
+
+                        fig.add_trace(go.Scatter3d(
+                            x=xs, y=ys, z=zs,
+                            mode='lines',  # ← БЕЗ markers
+                            line=dict(color='crimson', width=4),
+                            name='След пирамиды на меридиане',
+                            legendgroup='trace_on_planes',
+                            showlegend=(idx == 0),
+                        ))
+
+    # --------------------------------------------------------------
+    # Девиаторная (π-) плоскость: σ₁ + σ₂ + σ₃ = 3·σm
+    # --------------------------------------------------------------
+    if show_deviator_plane:
+        sigma_m = float(np.mean([s1, s2, s3]))
+        u = np.array([1.0, -1.0, 0.0]) / np.sqrt(2.0)
+        v = np.array([1.0, 1.0, -2.0]) / np.sqrt(6.0)
+        center = np.array([sigma_m, sigma_m, sigma_m])
+
+        L = 90.0
+        corners_uv = [(-L, -L), (+L, -L), (+L, +L), (-L, +L)]
+        pts = [center + cu * u + cv * v for cu, cv in corners_uv]
+        # ВАЖНО: переставляем (σ1, σ2, σ3) -> (x=σ2, y=σ3, z=σ1)
+        xs = [float(p[1]) for p in pts]
+        ys = [float(p[2]) for p in pts]
+        zs = [float(p[0]) for p in pts]
+
+        fig.add_trace(go.Mesh3d(
+            x=xs, y=ys, z=zs,
+            i=[0, 0], j=[1, 2], k=[2, 3],
+            color='deepskyblue', opacity=0.15,
+            name='Девиаторная (π-) плоскость',
+            showlegend=True, legendgroup='dev_plane',
+            hoverinfo='skip',
+        ))
+        fig.add_trace(go.Scatter3d(
+            x=xs + [xs[0]], y=ys + [ys[0]], z=zs + [zs[0]],
+            mode='lines', line=dict(color='deepskyblue', width=2),
+            name='Контур π-плоскости',
+            legendgroup='dev_plane', showlegend=False, hoverinfo='skip',
+        ))
+
+    # --------------------------------------------------------------
+    # Меридианная плоскость: содержит гидроось (1,1,1) и точку (σ1,σ2,σ3)
+    # --------------------------------------------------------------
+    if show_meridian_plane:
+        point = np.array([s1, s2, s3], dtype=float)
+        hydro = np.array([1.0, 1.0, 1.0])
+
+        normal = np.cross(hydro, point)
+        norm_val = np.linalg.norm(normal)
+        if norm_val < 1e-9:
+            st.info("Меридианная плоскость не определена: точка лежит на гидростатической оси.")
+        else:
+            normal /= norm_val
+            e1 = hydro / np.linalg.norm(hydro)  # вдоль гидрооси
+            proj = point - np.dot(point, e1) * e1  # проекция P ⟂ e1
+            e2 = proj / np.linalg.norm(proj)  # нормированный ⟂ e1
+
+            # Точка на плоскости — начало координат (гидроось проходит через O)
+            origin = np.zeros(3)
+
+            M = 100.0  # вдоль гидрооси
+            L = 100.0  # вдоль e2 (девиаторное направление)
+
+            # 4 угла параллелограмма как СМЕЩЕНИЯ от origin
+            pts = [
+                origin - M * e1 - L * e2,
+                origin - M * e1 + L * e2,
+                origin + M * e1 + L * e2,
+                origin + M * e1 - L * e2,
+            ]
+            # Перестановка (σ1, σ2, σ3) -> (x=σ2, y=σ3, z=σ1)
+            xs = [float(p[1]) for p in pts]
+            ys = [float(p[2]) for p in pts]
+            zs = [float(p[0]) for p in pts]
+
+            fig.add_trace(go.Mesh3d(
+                x=xs, y=ys, z=zs,
+                i=[0, 0], j=[1, 2], k=[2, 3],
+                color='mediumseagreen', opacity=0.15,
+                name='Меридианная плоскость',
+                showlegend=True, legendgroup='mer_plane',
+                hoverinfo='skip',
+            ))
+            fig.add_trace(go.Scatter3d(
+                x=xs + [xs[0]], y=ys + [ys[0]], z=zs + [zs[0]],
+                mode='lines', line=dict(color='mediumseagreen', width=2),
+                name='Контур меридианной плоскости',
+                legendgroup='mer_plane', showlegend=False, hoverinfo='skip',
+            ))
+
     fig.update_layout(
         uirevision="constant",
         scene=dict(
@@ -241,6 +622,7 @@ def update_plot(eigenvalues, c, phi, show_pyramid):
         'displayModeBar': True,
         'responsive': True
     })
+
 
 def update_pq_plot(inv, c, phi, sigma1, sigma3):
     """2D-график в плоскости p–q."""
@@ -321,90 +703,119 @@ def update_pq_plot(inv, c, phi, sigma1, sigma3):
         'responsive': True,
     })
 
-# ---------- Основной расчёт ----------
-def calculate():
-    try:
-        sigma = np.zeros((3, 3))
-        sigma[0, 0] = float(st.session_state.sigma11)
-        sigma[0, 1] = float(st.session_state.tau12)
-        sigma[0, 2] = float(st.session_state.tau13)
-        sigma[1, 1] = float(st.session_state.sigma22)
-        sigma[1, 2] = float(st.session_state.tau23)
-        sigma[2, 2] = float(st.session_state.sigma33)
 
-        sigma[1, 0] = sigma[0, 1]
-        sigma[2, 0] = sigma[0, 2]
-        sigma[2, 1] = sigma[1, 2]
+def update_deviator_plot(inv, c, phi, eigenvalues):
+    """
+    2D-график в девиаторной (π-) плоскости.
+    Каноническая ориентация: σ₁ вверх, σ₂ влево-вниз, σ₃ вправо-вниз.
+    """
+    fig = go.Figure()
 
-        E = float(st.session_state.E)
-        nu = float(st.session_state.nu)
-        c = float(st.session_state.c)
-        phi = radians(float(st.session_state.phi))
+    sin_phi = np.sin(phi)
+    cos_phi = np.cos(phi)
+    p = inv["p"]
 
-        G, K = calculate_moduli(E, nu)
-        eigenvalues, _ = calculate_principal_stresses(sigma)
-        eigenvalues = np.real(eigenvalues).astype(float)
+    d_TC = (6.0 * sin_phi * p + 6.0 * c * cos_phi) / (3.0 - sin_phi)
+    d_TE = (6.0 * sin_phi * p + 6.0 * c * cos_phi) / (3.0 + sin_phi)
 
-        inv = stress_invariants(sigma)
+    tc_eq  = p - d_TC / 3.0
+    tc_big = p + 2.0 * d_TC / 3.0
+    te_eq    = p + d_TE / 3.0
+    te_small = p - 2.0 * d_TE / 3.0
 
-        sigma_spherical, sigma_deviatoric = split_stress_tensor(sigma)
-        epsilon_spherical, epsilon_deviatoric, epsilon = calculate_strain_tensor(sigma, G, K)
+    def to_xy(s1, s2, s3):
+        """Канонические координаты: σ₁ вверх."""
+        x = (s3 - s2) / np.sqrt(2.0)
+        y = (2.0 * s1 - s2 - s3) / np.sqrt(6.0)
+        return x, y
 
-        strength_check = check_mohr_coulomb_strength(
-            float(eigenvalues[0]), float(eigenvalues[1]), float(eigenvalues[2]), c, phi
-        )
+    # Все 6 вершин, порядок даст сортировка
+    all_vertices = [
+        to_xy(tc_big,   tc_eq,    tc_eq),      # TC σ₁
+        to_xy(te_small, te_eq,    te_eq),      # TE σ₁
+        to_xy(tc_eq,    tc_big,   tc_eq),      # TC σ₂
+        to_xy(te_eq,    te_small, te_eq),      # TE σ₂
+        to_xy(tc_eq,    tc_eq,    tc_big),     # TC σ₃
+        to_xy(te_eq,    te_eq,    te_small),   # TE σ₃
+    ]
+    all_vertices.sort(key=lambda pt: np.arctan2(pt[1], pt[0]))
+    hex_xy_closed = all_vertices + [all_vertices[0]]
 
-        sigma_spherical_principal, sigma_deviatoric_principal = \
-            calculate_spherical_and_deviatoric_principal_stresses(eigenvalues)
+    # Контур (без заливки)
+    fig.add_trace(go.Scatter(
+        x=[pt[0] for pt in hex_xy_closed],
+        y=[pt[1] for pt in hex_xy_closed],
+        mode='lines+markers',
+        line=dict(color='orange', width=3),
+        marker=dict(color='orange', size=8),
+        name='След пирамиды Мора–Кулона',
+    ))
 
-        # ---------- Гармошка «Результаты расчета» ----------
-        with st.expander("Результаты расчета", expanded=True):
-            st.write(f"Модуль сдвига G: {round(G, 1)} кПа")
-            st.write(f"Объемный модуль K: {round(K, 1)} кПа\n")
+    # Оси: σ₁ вверх, σ₂ влево-вниз, σ₃ вправо-вниз
+    max_r = max(np.hypot(x, y) for x, y in all_vertices)
+    axis_len = max_r * 1.25
 
-            def print_matrix(matrix, name, precision):
-                st.write(f"{name}:\n")
-                matrix = np.real(matrix)
-                if precision == 1:
-                    fmt = "{:.1f}"
-                elif precision == 5:
-                    fmt = "{:.5f}"
-                else:
-                    fmt = "{}"
-                st.code(
-                    f"{fmt.format(matrix[0,0])}\t{fmt.format(matrix[0,1])}\t{fmt.format(matrix[0,2])}\n"
-                    f"{fmt.format(matrix[1,0])}\t{fmt.format(matrix[1,1])}\t{fmt.format(matrix[1,2])}\n"
-                    f"{fmt.format(matrix[2,0])}\t{fmt.format(matrix[2,1])}\t{fmt.format(matrix[2,2])}"
-                )
+    for name, ang_axis, color in [
+        ("σ₁",  np.pi / 2.0,        "red"),
+        ("σ₂", -5.0 * np.pi / 6.0,  "green"),
+        ("σ₃", -np.pi / 6.0,        "blue"),
+    ]:
+        fig.add_trace(go.Scatter(
+            x=[-axis_len * np.cos(ang_axis), axis_len * np.cos(ang_axis)],
+            y=[-axis_len * np.sin(ang_axis), axis_len * np.sin(ang_axis)],
+            mode='lines', line=dict(color=color, width=1, dash='dot'),
+            name=f"Ось {name}",
+        ))
 
-            print_matrix(sigma_spherical, "Шаровый тензор напряжений (кПа)", 1)
-            print_matrix(sigma_deviatoric, "Тензор-девиатор напряжений (кПа)", 1)
+    # Гидростатическая ось
+    fig.add_trace(go.Scatter(
+        x=[0], y=[0], mode='markers',
+        marker=dict(color='black', size=8, symbol='x'),
+        name='Гидростатическая ось',
+    ))
 
-            st.write(f"Главные напряжения (кПа): {np.round(eigenvalues, 1).tolist()}")
+    # Точка НДС
+    s1, s2, s3 = float(eigenvalues[0]), float(eigenvalues[1]), float(eigenvalues[2])
+    x_pt, y_pt = to_xy(s1, s2, s3)
 
-            st.write("**Инварианты напряжённого состояния:**")
-            st.write(f"I₁ = tr σ = {inv['I1']:.2f} кПа")
-            st.write(f"J₂ = ½ s:s = {inv['J2']:.2f} кПа²")
-            st.write(f"J₃ = ⅓ tr(s³) = {inv['J3']:.2f} кПа³")
-            st.write(f"p = I₁/3 = {inv['p']:.2f} кПа")
-            st.write(f"q = √(3J₂) = {inv['q']:.2f} кПа")
-            st.write(f"Угол Лоде θ = {inv['lode_deg']:.2f}° "f"({inv['lode_rad']:.4f} рад)")
+    fig.add_trace(go.Scatter(
+        x=[x_pt], y=[y_pt],
+        mode='markers+text',
+        marker=dict(color='red', size=14, symbol='circle',
+                    line=dict(color='darkred', width=2)),
+        text=[f"  θ={inv['lode_deg']:.1f}°, ρ={np.hypot(x_pt, y_pt):.1f}"],
+        textposition='top right',
+        name='Напряжённое состояние',
+    ))
 
-            print_matrix(sigma_spherical_principal, "Шаровая часть главных напряжений (кПа)", 1)
-            print_matrix(sigma_deviatoric_principal, "Девиаторная часть главных напряжений (кПа)", 1)
+    fig.add_trace(go.Scatter(
+        x=[0, x_pt], y=[0, y_pt], mode='lines',
+        line=dict(color='red', width=1, dash='dot'),
+        showlegend=False,
+    ))
 
-            print_matrix(epsilon_spherical, "Шаровая часть деформаций", 5)
-            print_matrix(epsilon_deviatoric, "Девиаторная часть деформаций", 5)
-            print_matrix(epsilon, "Полный тензор деформаций", 5)
+    fig.update_layout(
+        title=f"След пирамиды Мора–Кулона в π-плоскости при p = {p:.1f} кПа",
+        xaxis_title="x",
+        yaxis_title="y",
+        height=700,
+        margin=dict(l=60, r=20, t=60, b=50),
+        legend=dict(x=0.02, y=0.98, bgcolor='rgba(255,255,255,0.8)'),
+        yaxis=dict(scaleanchor="x", scaleratio=1),
+        uirevision="dev_constant",
+    )
 
-            if strength_check:
-                st.success("Прочность обеспечена (точка внутри пирамиды прочности).")
-            else:
-                st.error("Прочность не обеспечена (точка на грани или за пределами пирамиды).")
+    st.plotly_chart(fig, use_container_width=True, config={
+        'displayModeBar': True,
+        'responsive': True,
+    })
 
-        # ---------- Гармошка «Формулы для расчета» ----------
-        with st.expander("Формулы для расчета", expanded=False):
-            st.markdown(r"""
+
+# ============================================================
+# БЛОК 4. ТЕОРИЯ (содержимое гармошек)
+# ============================================================
+
+FORMULAS_MAIN = r"""
 ### 1. Упругие константы
 
 $$
@@ -523,11 +934,182 @@ q_{te} = \frac{6\sin\varphi}{3+\sin\varphi}\,p + \frac{6c\cos\varphi}{3+\sin\var
 $$
 
 и аналогичными соотношениями для остальных пяти рёбер, полученных циклической перестановкой индексов.
-""")
+"""
 
-        # --- 3D-график (существующий) ---
+FORMULAS_DEVIATOR = r"""
+### Девиаторная (π-) плоскость
+
+Девиаторная плоскость — это плоскость, перпендикулярная гидростатической оси
+$\sigma_1 = \sigma_2 = \sigma_3$ и проходящая через начало координат
+(или через точку с заданным средним напряжением $p$).
+
+### 1. Координаты в π-плоскости
+
+Проекция тензора напряжений на девиаторную плоскость описывается двумя
+координатами:
+
+$$
+x = \frac{\sigma_3 - \sigma_1}{\sqrt{2}},
+\qquad
+y = \frac{2\sigma_2 - \sigma_1 - \sigma_3}{\sqrt{6}}
+$$
+
+В этих координатах:
+
+$$
+\rho = \sqrt{x^2 + y^2} = \sqrt{2 J_2} = \frac{q}{\sqrt{3}}
+$$
+
+— расстояние от гидростатической оси до точки;
+
+$$
+\theta = \arctan\!\left(\frac{y}{x}\right)
+$$
+
+— угол Лоде – Надаи.
+
+### 2. Ориентация осей главных напряжений
+
+Оси $\sigma_1, \sigma_2, \sigma_3$ проецируются на π-плоскость под углами
+$+30°, +150°, -90°$ (то есть с шагом $120°$). При этом:
+
+- луч $\theta = +30°$ совпадает с направлением $\sigma_1$ (трёхосное сжатие);
+- луч $\theta = -30°$ совпадает с направлением $\sigma_3$ (трёхосное растяжение);
+- луч $\theta = 0°$ соответствует чистому сдвигу.
+
+### 3. Сечение Мора – Кулона
+
+При фиксированном $p$ сечение поверхности Мора – Кулона в π-плоскости
+представляет собой **неправильный шестиугольник**, описываемый в полярных
+координатах:
+
+$$
+q(\theta) = \frac{6\sin\varphi \cdot p + 6c\cos\varphi}{3 - \sin\varphi \sin 3\theta},
+\qquad
+\rho(\theta) = \frac{q(\theta)}{\sqrt{3}}
+$$
+
+Вершины шестиугольника чередуются:
+
+- при $\theta = +30°$ (и $-90°$, $+150°$) — «дальние» вершины (сжатие);
+- при $\theta = -30°$ (и $+90°$, $-150°$) — «близкие» вершины (растяжение).
+
+### 4. Критерий прочности в π-плоскости
+
+Точка напряжённого состояния находится **внутри** шестиугольника —
+прочность обеспечена; **на границе или снаружи** — прочность не обеспечена.
+
+Расстояние от точки до границы можно оценить как:
+
+$$
+\Delta \rho = \rho_{env}(\theta) - \rho_{pt}
+$$
+
+где $\rho_{env}(\theta)$ — радиус границы MC в направлении текущего угла Лоде,
+а $\rho_{pt}$ — радиус точки напряжённого состояния.
+"""
+
+
+# ============================================================
+# БЛОК 5. ОСНОВНОЙ РАСЧЁТ
+# ============================================================
+
+def calculate():
+    try:
+        sigma = np.zeros((3, 3))
+        sigma[0, 0] = float(st.session_state.sigma11)
+        sigma[0, 1] = float(st.session_state.tau12)
+        sigma[0, 2] = float(st.session_state.tau13)
+        sigma[1, 1] = float(st.session_state.sigma22)
+        sigma[1, 2] = float(st.session_state.tau23)
+        sigma[2, 2] = float(st.session_state.sigma33)
+
+        sigma[1, 0] = sigma[0, 1]
+        sigma[2, 0] = sigma[0, 2]
+        sigma[2, 1] = sigma[1, 2]
+
+        E = float(st.session_state.E)
+        nu = float(st.session_state.nu)
+        c = float(st.session_state.c)
+        phi = radians(float(st.session_state.phi))
+
+        G, K = calculate_moduli(E, nu)
+        eigenvalues, _ = calculate_principal_stresses(sigma)
+        eigenvalues = np.real(eigenvalues).astype(float)
+
+        inv = stress_invariants(sigma)
+
+        sigma_spherical, sigma_deviatoric = split_stress_tensor(sigma)
+        epsilon_spherical, epsilon_deviatoric, epsilon = calculate_strain_tensor(sigma, G, K)
+
+        strength_check = check_mohr_coulomb_strength(
+            float(eigenvalues[0]), float(eigenvalues[1]), float(eigenvalues[2]), c, phi
+        )
+
+        sigma_spherical_principal, sigma_deviatoric_principal = \
+            calculate_spherical_and_deviatoric_principal_stresses(eigenvalues)
+
+        # --- 3D-график ---
         show_pyramid = st.session_state.get("show_pyramid", False)
-        update_plot(eigenvalues, c, phi, show_pyramid)
+        show_dev_plane = st.session_state.get("show_deviator_plane", False)
+        show_mer_plane = st.session_state.get("show_meridian_plane", False)
+        update_plot(eigenvalues, c, phi, show_pyramid,
+                    show_deviator_plane=show_dev_plane,
+                    show_meridian_plane=show_mer_plane)
+
+        # ---------- Гармошка «Результаты расчета» ----------
+        with st.expander("Результаты расчета", expanded=True):
+            st.write(f"Модуль сдвига G: {round(G, 1)} кПа")
+            st.write(f"Объемный модуль K: {round(K, 1)} кПа\n")
+
+            def print_matrix(matrix, name, precision):
+                st.write(f"{name}:\n")
+                matrix = np.real(matrix)
+                if precision == 1:
+                    fmt = "{:.1f}"
+                elif precision == 5:
+                    fmt = "{:.5f}"
+                else:
+                    fmt = "{}"
+                st.code(
+                    f"{fmt.format(matrix[0,0])}\t{fmt.format(matrix[0,1])}\t{fmt.format(matrix[0,2])}\n"
+                    f"{fmt.format(matrix[1,0])}\t{fmt.format(matrix[1,1])}\t{fmt.format(matrix[1,2])}\n"
+                    f"{fmt.format(matrix[2,0])}\t{fmt.format(matrix[2,1])}\t{fmt.format(matrix[2,2])}"
+                )
+
+            print_matrix(sigma_spherical, "Шаровый тензор напряжений (кПа)", 1)
+            print_matrix(sigma_deviatoric, "Тензор-девиатор напряжений (кПа)", 1)
+
+            st.write(f"Главные напряжения (кПа): {np.round(eigenvalues, 1).tolist()}")
+
+            st.write("**Инварианты напряжённого состояния:**")
+            st.write(f"I₁ = tr σ = {inv['I1']:.2f} кПа")
+            st.write(f"J₂ = ½ s:s = {inv['J2']:.2f} кПа²")
+            st.write(f"J₃ = ⅓ tr(s³) = {inv['J3']:.2f} кПа³")
+            st.write(f"p = I₁/3 = {inv['p']:.2f} кПа")
+            st.write(f"q = √(3J₂) = {inv['q']:.2f} кПа")
+            st.write(f"Угол Лоде θ = {inv['lode_deg']:.2f}° "f"({inv['lode_rad']:.4f} рад)")
+
+            print_matrix(sigma_spherical_principal, "Шаровая часть главных напряжений (кПа)", 1)
+            print_matrix(sigma_deviatoric_principal, "Девиаторная часть главных напряжений (кПа)", 1)
+
+            print_matrix(epsilon_spherical, "Шаровая часть деформаций", 5)
+            print_matrix(epsilon_deviatoric, "Девиаторная часть деформаций", 5)
+            print_matrix(epsilon, "Полный тензор деформаций", 5)
+
+            if strength_check:
+                st.success("Прочность обеспечена (точка внутри пирамиды прочности).")
+            else:
+                st.error("Прочность не обеспечена (точка на грани или за пределами пирамиды).")
+
+        # ---------- Гармошка «Формулы для расчета» ----------
+        with st.expander("Формулы для расчета (основные)", expanded=False):
+            st.markdown(FORMULAS_MAIN)
+
+        # ---------- Гармошка «Девиаторная плоскость» ----------
+        with st.expander("Теория: девиаторная (π-) плоскость", expanded=False):
+            st.markdown(FORMULAS_DEVIATOR)
+
 
         # --- 2D-график в плоскости p–q ---
         update_pq_plot(
@@ -536,15 +1118,24 @@ $$
             sigma3=float(eigenvalues[2]),
         )
 
+        # --- 2D-график в девиаторной плоскости ---
+        update_deviator_plot(inv, c, phi, eigenvalues)
+
     except (ValueError, ZeroDivisionError) as e:
         st.error(f"Проверьте введенные данные! ({e})")
 
-# ---------- Синхронизация симметричных компонент ----------
+
+# ============================================================
+# БЛОК 6. СИНХРОНИЗАЦИЯ И ИНТЕРФЕЙС
+# ============================================================
+
 def sync_symmetric():
+    """Синхронизация симметричных компонент тензора."""
     st.session_state.tau21 = st.session_state.tau12
     st.session_state.tau31 = st.session_state.tau13
     st.session_state.tau32 = st.session_state.tau23
     calculate()
+
 
 # ---------- Инициализация зеркальных компонент ----------
 if 'tau21' not in st.session_state:
@@ -583,6 +1174,18 @@ st.sidebar.checkbox(
     "Показать поверхность прочности",
     value=False,
     key="show_pyramid",
+    on_change=calculate
+)
+st.sidebar.checkbox(
+    "Показать девиаторную плоскость",
+    value=False,
+    key="show_deviator_plane",
+    on_change=calculate
+)
+st.sidebar.checkbox(
+    "Показать меридианную плоскость",
+    value=False,
+    key="show_meridian_plane",
     on_change=calculate
 )
 
