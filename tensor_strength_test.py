@@ -3,6 +3,12 @@ import streamlit as st
 import plotly.graph_objs as go
 from math import radians
 
+# ============================================================
+# ЦВЕТОВАЯ СХЕМА ДЛЯ МЕРИДИАНОВ
+# ============================================================
+COLOR_TC = '#FFA500'  # Оранжевый - Трехосное сжатие (Triaxial Compression)
+COLOR_TE = '#FF4500'  # Красно-оранжевый - Трехосное растяжение (Triaxial Extension)
+
 st.set_page_config(
     layout="wide",
     page_title="Анализ НДС",
@@ -104,16 +110,24 @@ def stress_invariants(sigma):
 
 
 def strength_envelope_pq(p_array, c, phi):
-    """Границы Мора-Кулона в плоскости p–q для трёхосного сжатия и растяжения."""
+    """
+    Границы Мора-Кулона в плоскости p–q.
+    Возвращает два массива q для трехосного сжатия и растяжения.
+    """
     sin_phi = np.sin(phi)
     cos_phi = np.cos(phi)
 
-    # Triaxial compression (theta = +30°)
+    # Трехосное сжатие (Triaxial Compression, theta = +30°)
     M_tc = 6.0 * sin_phi / (3.0 - sin_phi)
     k_tc = 6.0 * c * cos_phi / (3.0 - sin_phi)
     q_tc = M_tc * p_array + k_tc
 
-    # Triaxial extension (theta = -30°)
+    # Трехосное растяжение (Triaxial Extension, theta = -30°)
+    # В критерии Мора-Кулона обе линии выходят из одной точки на оси p.
+    # Формула для наклона TE: M_te = 6*sin(phi) / (3 + sin(phi))
+    # Отсечка k_te должна быть такой, чтобы линия прошла через ту же вершину,
+    # что и TC. Вершина пирамиды находится при p = -c / tan(phi).
+    # Но для 2D графика проще использовать прямые формулы:
     M_te = 6.0 * sin_phi / (3.0 + sin_phi)
     k_te = 6.0 * c * cos_phi / (3.0 + sin_phi)
     q_te = M_te * p_array + k_te
@@ -356,13 +370,61 @@ def update_plot(eigenvalues, c, phi, show_pyramid,
         name="Гидростатическая ось"
     ))
 
-    # Оси главных напряжений
-    fig.add_trace(go.Scatter3d(x=[0, 0], y=[0, 0], z=[0, 40],
-                               mode='lines', line=dict(color='red'), name="σ₁"))
-    fig.add_trace(go.Scatter3d(x=[0, 40], y=[0, 0], z=[0, 0],
-                               mode='lines', line=dict(color='green'), name="σ₂"))
-    fig.add_trace(go.Scatter3d(x=[0, 0], y=[0, 40], z=[0, 0],
-                               mode='lines', line=dict(color='blue'), name="σ₃"))
+    # --------- Оси главных напряжений со стрелками ---------
+    # Вспомогательная функция для отрисовки оси со стрелкой
+    def add_arrow_axis(fig, direction, color, label, length=60.0):
+        """
+        Рисует ось в заданном направлении с конусом-стрелкой на конце.
+        direction: np.array([dx, dy, dz]) — единичный вектор направления
+        color: цвет оси
+        label: подпись (например, "σ₁")
+        length: длина оси
+        """
+        # Начало и конец линии
+        start = np.array([0.0, 0.0, 0.0])
+        end = direction * length
+
+        # 1. Линия оси
+        fig.add_trace(go.Scatter3d(
+            x=[start[0], end[0]],
+            y=[start[1], end[1]],
+            z=[start[2], end[2]],
+            mode='lines',
+            line=dict(color=color, width=4),
+            name=label,
+            showlegend=True,
+        ))
+
+        # 2. Конус-стрелка на конце
+        # Plotly Cone принимает координаты НАЧАЛА вектора (x,y,z)
+        # и компоненты вектора (u,v,w). Конус рисуется от точки (x,y,z)
+        # в направлении (u,v,w).
+        # Чтобы стрелка «сидела» на конце оси, сместим её немного назад.
+        arrow_length = 0.08 * length  # длина стрелки
+        arrow_pos = end - direction * arrow_length  # начало конуса
+        fig.add_trace(go.Cone(
+            x=[arrow_pos[0]],
+            y=[arrow_pos[1]],
+            z=[arrow_pos[2]],
+            u=[direction[0] * arrow_length],
+            v=[direction[1] * arrow_length],
+            w=[direction[2] * arrow_length],
+            colorscale=[[0, color], [1, color]],
+            showscale=False,
+            sizemode='absolute',
+            sizeref=arrow_length,
+            anchor='tail',
+            showlegend=False,
+            hoverinfo='skip',
+        ))
+
+    # Направления осей (в системе координат графика: x=σ₂, y=σ₃, z=σ₁)
+    # Ось σ₁ — вертикально вверх (z)
+    add_arrow_axis(fig, np.array([0.0, 0.0, 1.0]), 'red', 'σ₁', length=60.0)
+    # Ось σ₂ — вдоль x
+    add_arrow_axis(fig, np.array([1.0, 0.0, 0.0]), 'green', 'σ₂', length=60.0)
+    # Ось σ₃ — вдоль y
+    add_arrow_axis(fig, np.array([0.0, 1.0, 0.0]), 'blue', 'σ₃', length=60.0)
 
     # Точка НДС
     fig.add_trace(go.Scatter3d(
@@ -374,12 +436,12 @@ def update_plot(eigenvalues, c, phi, show_pyramid,
     hydro_mean = float(np.mean([s1, s2, s3]))
     fig.add_trace(go.Scatter3d(
         x=[0, hydro_mean], y=[0, hydro_mean], z=[0, hydro_mean],
-        mode='lines', line=dict(color='magenta', width=2),
+        mode='lines', line=dict(color='magenta', width=3),
         name="Шаровая часть напряжения"
     ))
     fig.add_trace(go.Scatter3d(
         x=[hydro_mean, s2], y=[hydro_mean, s3], z=[hydro_mean, s1],
-        mode='lines', line=dict(color='green', width=2),
+        mode='lines', line=dict(color='green', width=3),
         name="Девиаторная часть напряжения"
     ))
 
@@ -483,40 +545,52 @@ def update_plot(eigenvalues, c, phi, show_pyramid,
             if nv > 1e-9:
                 n_mer = n_mer_raw / nv
 
-                # Уровень обрезки пирамиды — совпадает с 3D-пирамидой
-                p_max = 150.0/3
-
-                # Реальные 12 рёбер пирамиды (без «фантомных» пар)
+                # Уровень обрезки пирамиды
+                p_max = 150.0 / 3
                 edges = pyramid_edges(c, phi, p_max)
-
-                # Пересечение рёбер с меридианной плоскостью
                 origin = np.zeros(3)
                 pts_in_plane = slice_edges_with_plane(edges, origin, n_mer)
 
-                for i, p in enumerate(pts_in_plane):
-                    st.write(f"  pt {i}: σ = ({p[0]:.2f}, {p[1]:.2f}, {p[2]:.2f}), "
-                             f"p = {(p[0] + p[1] + p[2]) / 3:.2f}")
-
                 if len(pts_in_plane) >= 2:
-                    # Находим вершину пирамиды V — это точка с минимальным p
+                    # Сортируем по p (среднему напряжению)
                     pts_sorted = sorted(pts_in_plane,
                                         key=lambda p: (p[0] + p[1] + p[2]) / 3.0)
-                    V_pt = pts_sorted[0]  # вершина (наименьшее p)
-                    far_pts = pts_sorted[1:]  # дальние точки (наибольшее p)
+                    V_pt = pts_sorted[0]   # вершина
+                    far_pts = pts_sorted[1:]  # дальние точки
 
-                    # Рисуем 2 луча из V в каждую дальнюю точку
+                    # Определяем для каждой дальней точки, TC это или TE.
+                    # Критерий: в направлении TC напряжение σ1 растёт быстрее,
+                    # чем σ3. Сравним приращения (far - V).
+                    # Для TC: Δσ1 > Δσ3 (луч идёт в сторону увеличения σ1)
+                    # Для TE: Δσ3 > Δσ1
                     for idx, far in enumerate(far_pts):
-                        xs = [float(V_pt[1]), float(far[1])]  # x = σ₂
-                        ys = [float(V_pt[2]), float(far[2])]  # y = σ₃
-                        zs = [float(V_pt[0]), float(far[0])]  # z = σ₁
+                        delta = far - V_pt
+                        # delta[0] = Δσ1, delta[2] = Δσ3
+                        # В системе (σ1, σ2, σ3) ось z = σ1, x = σ2, y = σ3
+                        # Но в plotly мы переставляем: x=σ2, y=σ3, z=σ1
+                        # Поэтому delta в исходных координатах: (Δσ1, Δσ2, Δσ3)
+                        # Δσ1 = delta[0], Δσ3 = delta[2]
+                        if delta[0] > delta[2]:
+                            # TC: сжатие
+                            line_color = COLOR_TC
+                            line_name = 'Меридиан сжатия (TC)'
+                        else:
+                            # TE: растяжение
+                            line_color = COLOR_TE
+                            line_name = 'Меридиан растяжения (TE)'
+
+                        # Координаты для plotly: x=σ2, y=σ3, z=σ1
+                        xs = [float(V_pt[1]), float(far[1])]
+                        ys = [float(V_pt[2]), float(far[2])]
+                        zs = [float(V_pt[0]), float(far[0])]
 
                         fig.add_trace(go.Scatter3d(
                             x=xs, y=ys, z=zs,
-                            mode='lines',  # ← БЕЗ markers
-                            line=dict(color='crimson', width=4),
-                            name='След пирамиды на меридиане',
+                            mode='lines',
+                            line=dict(color=line_color, width=5),  # Толще
+                            name=line_name,
                             legendgroup='trace_on_planes',
-                            showlegend=(idx == 0),
+                            showlegend=True,
                         ))
 
     # --------------------------------------------------------------
@@ -539,7 +613,7 @@ def update_plot(eigenvalues, c, phi, show_pyramid,
         fig.add_trace(go.Mesh3d(
             x=xs, y=ys, z=zs,
             i=[0, 0], j=[1, 2], k=[2, 3],
-            color='deepskyblue', opacity=0.15,
+            color='deepskyblue', opacity=0.10,
             name='Девиаторная (π-) плоскость',
             showlegend=True, legendgroup='dev_plane',
             hoverinfo='skip',
@@ -589,7 +663,7 @@ def update_plot(eigenvalues, c, phi, show_pyramid,
             fig.add_trace(go.Mesh3d(
                 x=xs, y=ys, z=zs,
                 i=[0, 0], j=[1, 2], k=[2, 3],
-                color='mediumseagreen', opacity=0.15,
+                color='mediumseagreen', opacity=0.10,
                 name='Меридианная плоскость',
                 showlegend=True, legendgroup='mer_plane',
                 hoverinfo='skip',
@@ -628,37 +702,28 @@ def update_pq_plot(inv, c, phi, sigma1, sigma3):
     """2D-график в плоскости p–q."""
     fig = go.Figure()
 
-    # Диапазон p — подберём так, чтобы захватить точку
-    p_min = min(-20.0, inv["p"] - 30.0)
+    # Вершина пирамиды на оси p
+    p_vertex = -c / np.tan(phi) if np.tan(phi) != 0 else 0.0
+
+    p_min = min(p_vertex - 10.0, inv["p"] - 30.0)
     p_max = max(200.0, inv["p"] + 50.0)
     p_arr = np.linspace(p_min, p_max, 400)
 
     q_tc, q_te = strength_envelope_pq(p_arr, c, phi)
 
-    # Область прочности — заливаем между двумя границами
-    fig.add_trace(go.Scatter(
-        x=np.concatenate([p_arr, p_arr[::-1]]),
-        y=np.concatenate([q_tc, q_te[::-1]]),
-        fill='toself',
-        fillcolor='rgba(255, 165, 0, 0.15)',
-        line=dict(color='rgba(255, 165, 0, 0)'),
-        name='Область прочности',
-        hoverinfo='skip',
-    ))
-
-    # Верхняя граница (triaxial compression)
+    # Верхняя граница (triaxial compression) - сплошная, цвет TC
     fig.add_trace(go.Scatter(
         x=p_arr, y=q_tc,
         mode='lines',
-        line=dict(color='orange', width=2),
+        line=dict(color=COLOR_TC, width=3), # Сплошная линия
         name='Мора–Кулон (сжатие, θ=+30°)',
     ))
 
-    # Нижняя граница (triaxial extension)
+    # Нижняя граница (triaxial extension) - сплошная, цвет TE
     fig.add_trace(go.Scatter(
         x=p_arr, y=q_te,
         mode='lines',
-        line=dict(color='darkorange', width=2, dash='dash'),
+        line=dict(color=COLOR_TE, width=3), # Убрали dash='dash', сделали сплошной
         name='Мора–Кулон (растяжение, θ=−30°)',
     ))
 
@@ -674,7 +739,8 @@ def update_pq_plot(inv, c, phi, sigma1, sigma3):
     fig.add_trace(go.Scatter(
         x=[inv["p"]], y=[inv["q"]],
         mode='markers+text',
-        marker=dict(color='red', size=12, symbol='circle'),
+        marker=dict(color='red', size=12, symbol='circle',
+                    line=dict(color='darkred', width=2)),
         text=[f"  p={inv['p']:.1f}, q={inv['q']:.1f}"],
         textposition='top right',
         name='Напряжённое состояние',
@@ -688,6 +754,11 @@ def update_pq_plot(inv, c, phi, sigma1, sigma3):
         showlegend=False,
     ))
 
+    # Вертикальная линия в вершине пирамиды
+    fig.add_vline(x=p_vertex, line_dash="dash", line_color="gray", opacity=0.5,
+                  annotation_text=f"Вершина p={p_vertex:.1f}",
+                  annotation_position="bottom right")
+
     fig.update_layout(
         title=f"Плоскость p–q   (θ = {inv['lode_deg']:.1f}°)",
         xaxis_title="p = (σ₁+σ₂+σ₃)/3, кПа",
@@ -696,6 +767,8 @@ def update_pq_plot(inv, c, phi, sigma1, sigma3):
         margin=dict(l=60, r=20, t=50, b=50),
         legend=dict(x=0.02, y=0.98, bgcolor='rgba(255,255,255,0.8)'),
         uirevision="pq_constant",
+        xaxis=dict(range=[p_min, p_max]),
+        yaxis=dict(range=[0, max(np.max(q_tc), inv["q"]) * 1.2])
     )
 
     st.plotly_chart(fig, use_container_width=True, config={
@@ -746,8 +819,8 @@ def update_deviator_plot(inv, c, phi, eigenvalues):
         x=[pt[0] for pt in hex_xy_closed],
         y=[pt[1] for pt in hex_xy_closed],
         mode='lines+markers',
-        line=dict(color='orange', width=3),
-        marker=dict(color='orange', size=8),
+        line=dict(color='crimson', width=2),
+        marker=dict(color='crimson', size=8),
         name='След пирамиды Мора–Кулона',
     ))
 
@@ -1058,7 +1131,7 @@ def calculate():
                     show_meridian_plane=show_mer_plane)
 
         # ---------- Гармошка «Результаты расчета» ----------
-        with st.expander("Результаты расчета", expanded=True):
+        with st.expander("Результаты расчета", expanded=False):
             st.write(f"Модуль сдвига G: {round(G, 1)} кПа")
             st.write(f"Объемный модуль K: {round(K, 1)} кПа\n")
 
