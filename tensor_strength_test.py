@@ -780,8 +780,13 @@ def update_pq_plot(inv, c, phi, sigma1, sigma3):
 def update_deviator_plot(inv, c, phi, eigenvalues):
     """
     2D-график в девиаторной (π-) плоскости.
-    Каноническая ориентация: σ₁ вверх, σ₂ влево-вниз, σ₃ вправо-вниз.
+    Ориентация осей согласована с 3D-графиком:
+      σ₁ — вверх (+90°)
+      σ₂ — влево-вниз (+210° = −150°)
+      σ₃ — вправо-вниз (−30°)
     """
+    import plotly.graph_objects as go
+
     fig = go.Figure()
 
     sin_phi = np.sin(phi)
@@ -796,58 +801,140 @@ def update_deviator_plot(inv, c, phi, eigenvalues):
     te_eq    = p + d_TE / 3.0
     te_small = p - 2.0 * d_TE / 3.0
 
+    # Координаты в π-плоскости (канонические, θ = +30° для σ₁)
     def to_xy(s1, s2, s3):
-        """Канонические координаты: σ₁ вверх."""
         x = (s3 - s2) / np.sqrt(2.0)
         y = (2.0 * s1 - s2 - s3) / np.sqrt(6.0)
         return x, y
 
-    # Все 6 вершин, порядок даст сортировка
-    all_vertices = [
-        to_xy(tc_big,   tc_eq,    tc_eq),      # TC σ₁
-        to_xy(te_small, te_eq,    te_eq),      # TE σ₁
-        to_xy(tc_eq,    tc_big,   tc_eq),      # TC σ₂
-        to_xy(te_eq,    te_small, te_eq),      # TE σ₂
-        to_xy(tc_eq,    tc_eq,    tc_big),     # TC σ₃
-        to_xy(te_eq,    te_eq,    te_small),   # TE σ₃
+    # --- 6 вершин шестиугольника (обход по кругу) ---
+    # В канонических координатах (x = (σ₃−σ₂)/√2, y = (2σ₁−σ₂−σ₃)/√6)
+    # вершина TCσ₁ лежит при θ=+30°, TEσ₂ — при θ=+150°, TCσ₂ — при θ=−90° и т.д.
+    hex_vertices_named = [
+        ("TCσ₁", to_xy(tc_big,   tc_eq,    tc_eq)),
+        ("TEσ₂", to_xy(te_eq,    te_small, te_eq)),
+        ("TCσ₃", to_xy(tc_eq,    tc_eq,    tc_big)),
+        ("TEσ₁", to_xy(te_small, te_eq,    te_eq)),
+        ("TCσ₂", to_xy(tc_eq,    tc_big,   tc_eq)),
+        ("TEσ₃", to_xy(te_eq,    te_eq,    te_small)),
     ]
-    all_vertices.sort(key=lambda pt: np.arctan2(pt[1], pt[0]))
-    hex_xy_closed = all_vertices + [all_vertices[0]]
+    hex_xy_closed = [pt for _, pt in hex_vertices_named] + [hex_vertices_named[0][1]]
 
-    # Контур (без заливки)
+    # --- Рабочая область: четырёхугольник (0,0) → TCσ₁ → TEσ₃ → TCσ₂ → (0,0) ---
+    # Это пересечение фундаментального сектора (между осями σ₁ и σ₂)
+    # с шестиугольником Мора–Кулона.
+    pt_TC1 = hex_vertices_named[0][1]  # TCσ₁  (угол +90°)
+    pt_TE3 = hex_vertices_named[5][1]  # TEσ₃  (угол +150°)
+    pt_TC2 = hex_vertices_named[4][1]  # TCσ₂  (угол -150° = +210°)
+
+    work_x = [0.0, pt_TC1[0], pt_TE3[0], pt_TC2[0], 0.0]
+    work_y = [0.0, pt_TC1[1], pt_TE3[1], pt_TC2[1], 0.0]
+
+    # Полупрозрачная заливка
+    fig.add_trace(go.Scatter(
+        x=work_x, y=work_y,
+        fill='toself',
+        fillcolor='rgba(255, 165, 0, 0.25)',
+        line=dict(color='rgba(255, 165, 0, 0.0)'),
+        name='Рабочая область (фундаментальный сектор)',
+        hoverinfo='skip',
+        showlegend=True,
+        legendgroup='working_area',
+    ))
+
+    # Штриховка рабочей области
+    try:
+        fig.add_trace(go.Scatter(
+            x=work_x, y=work_y,
+            fill='toself',
+            fillcolor='rgba(255, 165, 0, 0.0)',
+            line=dict(color='rgba(255, 165, 0, 0.0)'),
+            fillpattern=dict(
+                shape='/',
+                fgcolor='rgba(200, 120, 0, 0.6)',
+                bgcolor='rgba(255, 255, 255, 0.0)',
+                fillmode='overlay',
+                size=8,
+                solidity=0.4,
+            ),
+            name='Штриховка',
+            hoverinfo='skip',
+            showlegend=False,
+            legendgroup='working_area',
+        ))
+    except Exception:
+        pass
+
+    # --- Контур шестиугольника ---
     fig.add_trace(go.Scatter(
         x=[pt[0] for pt in hex_xy_closed],
         y=[pt[1] for pt in hex_xy_closed],
         mode='lines+markers',
-        line=dict(color='crimson', width=2),
+        line=dict(color='crimson', width=3),
         marker=dict(color='crimson', size=8),
         name='След пирамиды Мора–Кулона',
     ))
 
-    # Оси: σ₁ вверх, σ₂ влево-вниз, σ₃ вправо-вниз
-    max_r = max(np.hypot(x, y) for x, y in all_vertices)
+    # --- Оси со стрелками ---
+    # ВАЖНО: углы подобраны под ориентацию 3D-графика
+    # σ₁ — вверх (+90°)
+    # σ₂ — влево-вниз (210° = −150°)
+    # σ₃ — вправо-вниз (−30°)
+    max_r = max(np.hypot(x, y) for _, pt in hex_vertices_named for x, y in [pt])
     axis_len = max_r * 1.25
 
-    for name, ang_axis, color in [
-        ("σ₁",  np.pi / 2.0,        "red"),
-        ("σ₂", -5.0 * np.pi / 6.0,  "green"),
-        ("σ₃", -np.pi / 6.0,        "blue"),
-    ]:
+    axes_def = [
+        ("σ₁",  np.pi / 2.0,           "red"),    # +90°
+        ("σ₂",  7.0 * np.pi / 6.0,     "green"),  # +210° = −150°
+        ("σ₃", -np.pi / 6.0,           "blue"),   # −30°
+    ]
+
+    for name, ang_axis, color in axes_def:
+        x1 = axis_len * np.cos(ang_axis)
+        y1 = axis_len * np.sin(ang_axis)
+
         fig.add_trace(go.Scatter(
-            x=[-axis_len * np.cos(ang_axis), axis_len * np.cos(ang_axis)],
-            y=[-axis_len * np.sin(ang_axis), axis_len * np.sin(ang_axis)],
-            mode='lines', line=dict(color=color, width=1, dash='dot'),
+            x=[0.0, x1], y=[0.0, y1],
+            mode='lines',
+            line=dict(color=color, width=2, dash='dot'),
             name=f"Ось {name}",
+            showlegend=True,
+            legendgroup='axes',
         ))
 
-    # Гидростатическая ось
+        # Стрелка
+        fig.add_annotation(
+            x=x1, y=y1,
+            ax=0.0, ay=0.0,
+            xref='x', yref='y',
+            axref='x', ayref='y',
+            showarrow=True,
+            arrowhead=3,
+            arrowsize=1.5,
+            arrowwidth=2,
+            arrowcolor=color,
+            text='',
+        )
+
+        # Подпись
+        label_r = axis_len * 1.12
+        fig.add_annotation(
+            x=label_r * np.cos(ang_axis),
+            y=label_r * np.sin(ang_axis),
+            text=f"<b>{name}</b>",
+            showarrow=False,
+            font=dict(color=color, size=14),
+            xref='x', yref='y',
+        )
+
+    # --- Гидростатическая ось ---
     fig.add_trace(go.Scatter(
         x=[0], y=[0], mode='markers',
-        marker=dict(color='black', size=8, symbol='x'),
+        marker=dict(color='black', size=10, symbol='x'),
         name='Гидростатическая ось',
     ))
 
-    # Точка НДС
+    # --- Точка НДС ---
     s1, s2, s3 = float(eigenvalues[0]), float(eigenvalues[1]), float(eigenvalues[2])
     x_pt, y_pt = to_xy(s1, s2, s3)
 
@@ -867,6 +954,7 @@ def update_deviator_plot(inv, c, phi, eigenvalues):
         showlegend=False,
     ))
 
+    # --- Оформление ---
     fig.update_layout(
         title=f"След пирамиды Мора–Кулона в π-плоскости при p = {p:.1f} кПа",
         xaxis_title="x",
