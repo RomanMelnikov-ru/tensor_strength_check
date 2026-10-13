@@ -1222,19 +1222,19 @@ if 'tau32' not in st.session_state:
 st.sidebar.header("Тензор напряжений")
 
 c1, c2, c3 = st.sidebar.columns(3)
-c1.number_input("σ₁₁", value=30.0, key="sigma11", on_change=calculate)
-c2.number_input("τ₁₂", value=0.0, key="tau12", on_change=sync_symmetric)
-c3.number_input("τ₁₃", value=0.0, key="tau13", on_change=sync_symmetric)
+c1.number_input("σ_xx", value=30.0, key="sigma11", on_change=calculate)
+c2.number_input("τ_xy", value=0.0, key="tau12", on_change=sync_symmetric)
+c3.number_input("τ_xz", value=0.0, key="tau13", on_change=sync_symmetric)
 
 c1, c2, c3 = st.sidebar.columns(3)
-c1.number_input("τ₂₁", key="tau21", disabled=True)
-c2.number_input("σ₂₂", value=30.0, key="sigma22", on_change=calculate)
-c3.number_input("τ₂₃", value=0.0, key="tau23", on_change=sync_symmetric)
+c1.number_input("τ_yx", key="tau21", disabled=True)
+c2.number_input("σ_yy", value=30.0, key="sigma22", on_change=calculate)
+c3.number_input("τ_yz", value=0.0, key="tau23", on_change=sync_symmetric)
 
 c1, c2, c3 = st.sidebar.columns(3)
-c1.number_input("τ₃₁", key="tau31", disabled=True)
-c2.number_input("τ₃₂", key="tau32", disabled=True)
-c3.number_input("σ₃₃", value=30.0, key="sigma33", on_change=calculate)
+c1.number_input("τ_zx", key="tau31", disabled=True)
+c2.number_input("τ_zy", key="tau32", disabled=True)
+c3.number_input("σ_zz", value=30.0, key="sigma33", on_change=calculate)
 
 st.sidebar.header("Механические характеристики")
 st.sidebar.number_input("Модуль Юнга E (кПа)", value=10000.0, key="E", on_change=calculate)
